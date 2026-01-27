@@ -44,6 +44,21 @@ func (h *AccountHandler) List(c *gin.Context) {
 		return
 	}
 
+	if accounts, ok := result.Data.([]models.Account); ok && len(accounts) > 0 {
+		cliproxy := services.GetCliproxySyncService()
+		if cliproxy.Enabled() {
+			if remote, err := cliproxy.RemoteAuthFileNames(c.Request.Context()); err == nil {
+				for i := range accounts {
+					accounts[i].CliproxySynced = cliproxy.RemoteHasAccount(remote, &accounts[i])
+					if !accounts[i].CliproxySynced {
+						accounts[i].CliproxySyncedAt = nil
+					}
+				}
+				result.Data = accounts
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, result)
 }
 

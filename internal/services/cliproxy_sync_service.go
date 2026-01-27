@@ -29,6 +29,7 @@ const (
 	defaultCliproxyPrefix   = "codex"
 	defaultCliproxyTimeout  = 15 * time.Second
 	cliproxyAuthFilePattern = "%s-%s.json"
+	cliproxyRemoteCacheTTL  = 30 * time.Second
 )
 
 type CliproxySyncService struct {
@@ -38,6 +39,9 @@ type CliproxySyncService struct {
 	timeout       time.Duration
 	client        *http.Client
 	enabled       bool
+	remoteCacheMu sync.Mutex
+	remoteCacheAt time.Time
+	remoteCache   map[string]struct{}
 }
 
 var (
@@ -142,6 +146,8 @@ func (s *CliproxySyncService) SyncAccount(ctx context.Context, account *models.A
 		return fmt.Errorf("cliproxy import failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	s.markSynced(account)
+	s.cleanupLegacyFiles(ctx, account)
+	s.invalidateRemoteCache()
 	return nil
 }
 
@@ -174,6 +180,98 @@ func (s *CliproxySyncService) markSynced(account *models.Account) {
 	}
 	account.CliproxySynced = true
 	account.CliproxySyncedAt = &now
+}
+
+func (s *CliproxySyncService) RemoteAuthFileNames(ctx context.Context) (map[string]struct{}, error) {
+	if s == nil || !s.enabled {
+		return nil, errors.New("cliproxy sync is not configured")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	now := time.Now()
+	s.remoteCacheMu.Lock()
+	if s.remoteCache != nil && now.Sub(s.remoteCacheAt) < cliproxyRemoteCacheTTL {
+		cached := make(map[string]struct{}, len(s.remoteCache))
+		for k := range s.remoteCache {
+			cached[k] = struct{}{}
+		}
+		s.remoteCacheMu.Unlock()
+		return cached, nil
+	}
+	s.remoteCacheMu.Unlock()
+
+	reqURL := fmt.Sprintf("%s/v0/management/auth-files", s.baseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.managementKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("cliproxy list failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var payload struct {
+		Files []struct {
+			Name     string `json:"name"`
+			ID       string `json:"id"`
+			FileName string `json:"file_name"`
+		} `json:"files"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+
+	names := make(map[string]struct{}, len(payload.Files))
+	for _, f := range payload.Files {
+		name := strings.TrimSpace(f.Name)
+		if name == "" {
+			name = strings.TrimSpace(f.ID)
+		}
+		if name == "" {
+			name = strings.TrimSpace(f.FileName)
+		}
+		if name == "" {
+			continue
+		}
+		names[name] = struct{}{}
+	}
+
+	s.remoteCacheMu.Lock()
+	s.remoteCache = names
+	s.remoteCacheAt = time.Now()
+	s.remoteCacheMu.Unlock()
+
+	copied := make(map[string]struct{}, len(names))
+	for k := range names {
+		copied[k] = struct{}{}
+	}
+	return copied, nil
+}
+
+func (s *CliproxySyncService) RemoteHasAccount(remote map[string]struct{}, account *models.Account) bool {
+	if len(remote) == 0 || account == nil {
+		return false
+	}
+	for _, name := range s.expectedFileNames(account) {
+		if name == "" {
+			continue
+		}
+		if _, ok := remote[name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *CliproxySyncService) buildPayload(account *models.Account) (map[string]interface{}, error) {
@@ -211,10 +309,27 @@ func (s *CliproxySyncService) buildPayload(account *models.Account) (map[string]
 	return payload, nil
 }
 
+func (s *CliproxySyncService) expectedFileNames(account *models.Account) []string {
+	if account == nil {
+		return nil
+	}
+	current := s.buildFileName(account)
+	names := []string{current}
+	legacyID := s.buildLegacyAccountIDFileName(account)
+	if legacyID != "" && legacyID != current {
+		names = append(names, legacyID)
+	}
+	legacyEmail := s.buildLegacyEmailFileName(account)
+	if legacyEmail != "" && legacyEmail != current {
+		names = append(names, legacyEmail)
+	}
+	return names
+}
+
 func (s *CliproxySyncService) buildFileName(account *models.Account) string {
-	base := strings.TrimSpace(account.AccountID)
+	base := strings.TrimSpace(account.Email)
 	if base == "" {
-		base = strings.TrimSpace(account.Email)
+		base = strings.TrimSpace(account.AccountID)
 	}
 	if base == "" {
 		base = fmt.Sprintf("account-%d", account.ID)
@@ -223,7 +338,57 @@ func (s *CliproxySyncService) buildFileName(account *models.Account) string {
 	return fmt.Sprintf(cliproxyAuthFilePattern, s.filePrefix, base)
 }
 
+func (s *CliproxySyncService) buildLegacyAccountIDFileName(account *models.Account) string {
+	if account == nil {
+		return ""
+	}
+	base := strings.TrimSpace(account.AccountID)
+	if base == "" {
+		return ""
+	}
+	base = sanitizeFileName(base)
+	return fmt.Sprintf(cliproxyAuthFilePattern, s.filePrefix, base)
+}
+
+func (s *CliproxySyncService) buildLegacyEmailFileName(account *models.Account) string {
+	if account == nil {
+		return ""
+	}
+	base := strings.TrimSpace(account.Email)
+	if base == "" {
+		return ""
+	}
+	base = sanitizeFileNameLegacy(base)
+	return fmt.Sprintf(cliproxyAuthFilePattern, s.filePrefix, base)
+}
+
 func sanitizeFileName(input string) string {
+	if input == "" {
+		return "account"
+	}
+	var b strings.Builder
+	for _, r := range input {
+		if r > unicode.MaxASCII {
+			b.WriteByte('_')
+			continue
+		}
+		if (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '.' || r == '@' || r == '+' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	out := strings.Trim(b.String(), "._-")
+	if out == "" {
+		return "account"
+	}
+	return out
+}
+
+func sanitizeFileNameLegacy(input string) string {
 	if input == "" {
 		return "account"
 	}
@@ -247,6 +412,69 @@ func sanitizeFileName(input string) string {
 		return "account"
 	}
 	return out
+}
+
+func (s *CliproxySyncService) cleanupLegacyFiles(ctx context.Context, account *models.Account) {
+	if account == nil || s == nil || !s.enabled {
+		return
+	}
+	current := s.buildFileName(account)
+	legacyNames := []string{
+		s.buildLegacyAccountIDFileName(account),
+		s.buildLegacyEmailFileName(account),
+	}
+	for _, name := range legacyNames {
+		if name == "" || name == current {
+			continue
+		}
+		if err := s.deleteRemoteAuthFile(ctx, name); err != nil {
+			log.Printf("cliproxy cleanup failed for %s: %v", name, err)
+		}
+	}
+}
+
+func (s *CliproxySyncService) deleteRemoteAuthFile(ctx context.Context, name string) error {
+	if s == nil || !s.enabled {
+		return errors.New("cliproxy sync is not configured")
+	}
+	if name == "" {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	reqURL := fmt.Sprintf("%s/v0/management/auth-files?name=%s", s.baseURL, url.QueryEscape(name))
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, reqURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.managementKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("cliproxy delete failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func (s *CliproxySyncService) invalidateRemoteCache() {
+	if s == nil {
+		return
+	}
+	s.remoteCacheMu.Lock()
+	s.remoteCache = nil
+	s.remoteCacheAt = time.Time{}
+	s.remoteCacheMu.Unlock()
 }
 
 func extractAccountIDFromAccessToken(token string) string {

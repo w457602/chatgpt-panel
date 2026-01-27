@@ -529,6 +529,8 @@
                         const success = typeof res?.success === 'number' ? res.success : 0;
                         const total = typeof res?.total === 'number' ? res.total : success + failed;
                         this.cliproxySyncMessage = `同步完成: 成功 ${success} / 总数 ${total} / 失败 ${failed}`;
+                        await this.loadAccounts();
+                        await this.loadStats();
                     } catch (e) {
                         this.cliproxySyncMessage = '同步失败: ' + e.message;
                     } finally {
