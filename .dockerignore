@@ -1,0 +1,12 @@
+.git
+.cache
+dist
+__pycache__
+.DS_Store
+.env
+.env.*
+*.py
+*.txt
+*.csv
+*.log
+chatgpt_accounts_api.json

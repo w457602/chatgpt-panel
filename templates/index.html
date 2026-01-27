@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatGPT 账号管理面板</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        [x-cloak] { display: none !important; }
+        .truncate-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen" x-data="app()" x-init="init()">
+    <!-- 登录页面 -->
+    <div x-show="!token" x-cloak class="min-h-screen flex items-center justify-center">
+        <div class="bg-white p-8 rounded-lg shadow-lg w-96">
+            <h1 class="text-2xl font-bold text-center mb-6">ChatGPT 账号管理</h1>
+            <form @submit.prevent="login">
+                <div class="mb-4">
+                    <label class="block text-gray-700 mb-2">用户名</label>
+                    <input type="text" x-model="loginForm.username" class="w-full border rounded px-3 py-2" required>
+                </div>
+                <div class="mb-6">
+                    <label class="block text-gray-700 mb-2">密码</label>
+                    <input type="password" x-model="loginForm.password" class="w-full border rounded px-3 py-2" required>
+                </div>
+                <button type="submit" class="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600">登录</button>
+                <p x-show="loginError" class="text-red-500 text-sm mt-2" x-text="loginError"></p>
+            </form>
+        </div>
+    </div>
+
+    <!-- 主界面 -->
+    <div x-show="token" x-cloak>
+        <!-- 顶部导航 -->
+        <nav class="bg-white shadow">
+            <div class="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
+                <h1 class="text-xl font-bold text-gray-800">ChatGPT 账号管理面板</h1>
+                <div class="flex items-center gap-4">
+                    <span class="text-gray-600" x-text="currentUser?.username"></span>
+                    <button @click="logout" class="text-red-500 hover:text-red-700">退出</button>
+                </div>
+            </div>
+        </nav>
+
+        <!-- 统计卡片 -->
+        <div class="max-w-7xl mx-auto px-4 py-6">
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="text-sm text-gray-500">总账号</div>
+                    <div class="text-2xl font-bold" x-text="stats.total || 0"></div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="text-sm text-gray-500">待处理</div>
+                    <div class="text-2xl font-bold text-yellow-500" x-text="stats.pending || 0"></div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="text-sm text-gray-500">已激活</div>
+                    <div class="text-2xl font-bold text-green-500" x-text="stats.active || 0"></div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="text-sm text-gray-500">失败</div>
+                    <div class="text-2xl font-bold text-red-500" x-text="stats.failed || 0"></div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="text-sm text-gray-500">有RT</div>
+                    <div class="text-2xl font-bold text-blue-500" x-text="stats.with_refresh_token || 0"></div>
+                </div>
+                <div class="bg-white rounded-lg shadow p-4">
+                    <div class="text-sm text-gray-500">今日新增</div>
+                    <div class="text-2xl font-bold text-purple-500" x-text="stats.today_count || 0"></div>
+                </div>
+            </div>
+
+            <!-- 筛选栏 -->
+            <div class="bg-white rounded-lg shadow p-4 mb-6">
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                    <input type="text" x-model="filter.search" @input.debounce.300ms="loadAccounts" placeholder="搜索邮箱..." class="border rounded px-3 py-2">
+                    <select x-model="filter.status" @change="loadAccounts" class="border rounded px-3 py-2">
+                        <option value="">全部状态</option>
+                        <option value="pending">待处理</option>
+                        <option value="active">已激活</option>
+                        <option value="failed">失败</option>
+                        <option value="expired">已过期</option>
+                    </select>
+                    <select x-model="filter.has_rt" @change="loadAccounts" class="border rounded px-3 py-2">
+                        <option value="">RT状态</option>
+                        <option value="yes">有RT</option>
+                        <option value="no">无RT</option>
+                    </select>
+                    <input type="date" x-model="filter.date_from" @change="loadAccounts" class="border rounded px-3 py-2">
+                    <input type="date" x-model="filter.date_to" @change="loadAccounts" class="border rounded px-3 py-2">
+                    <button @click="resetFilter" class="bg-gray-200 hover:bg-gray-300 rounded px-3 py-2">重置</button>
+                </div>
+            </div>
+
+            <!-- 批量操作 -->
+            <div x-show="selectedIds.length > 0" class="bg-blue-50 rounded-lg p-4 mb-4 flex items-center gap-4">
+                <span>已选择 <span x-text="selectedIds.length"></span> 项</span>
+                <button @click="batchTestAccounts" class="bg-purple-500 text-white px-3 py-1 rounded">批量测试</button>
+                <button @click="batchUpdateStatus('active')" class="bg-green-500 text-white px-3 py-1 rounded">标记激活</button>
+                <button @click="batchUpdateStatus('failed')" class="bg-red-500 text-white px-3 py-1 rounded">标记失败</button>
+                <button @click="batchDelete" class="bg-red-600 text-white px-3 py-1 rounded">批量删除</button>
+            </div>
+
+            <!-- 账号表格 -->
+            <div class="bg-white rounded-lg shadow overflow-hidden">
+                <table class="w-full">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-4 py-3"><input type="checkbox" @change="toggleSelectAll" :checked="isAllSelected"></th>
+                            <th class="px-4 py-3 text-left">邮箱</th>
+                            <th class="px-4 py-3 text-left">密码</th>
+                            <th class="px-4 py-3 text-left">状态</th>
+                            <th class="px-4 py-3 text-left">RT</th>
+                            <th class="px-4 py-3 text-left">绑卡链接</th>
+                            <th class="px-4 py-3 text-left">注册时间</th>
+                            <th class="px-4 py-3 text-left">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="account in accounts" :key="account.id">
+                            <tr class="border-t hover:bg-gray-50">
+                                <td class="px-4 py-3"><input type="checkbox" :value="account.id" x-model="selectedIds"></td>
+                                <td class="px-4 py-3 truncate-cell" :title="account.email">
+                                    <span class="cursor-pointer" @click="copyText(account.email)" x-text="account.email"></span>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <span class="cursor-pointer" @click="copyText(account.password)" title="点击复制">••••••</span>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <span class="px-2 py-1 rounded text-xs"
+                                        :class="{
+                                            'bg-yellow-100 text-yellow-800': account.status === 'pending',
+                                            'bg-green-100 text-green-800': account.status === 'active',
+                                            'bg-red-100 text-red-800': account.status === 'failed',
+                                            'bg-gray-100 text-gray-800': account.status === 'expired'
+                                        }"
+                                        x-text="statusText(account.status)"></span>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <span x-show="account.refresh_token" class="text-green-500"><i class="fas fa-check"></i></span>
+                                    <span x-show="!account.refresh_token" class="text-gray-300"><i class="fas fa-times"></i></span>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <a x-show="account.checkout_url" :href="account.checkout_url" target="_blank" class="text-blue-500 hover:underline">绑卡</a>
+                                </td>
+                                <td class="px-4 py-3 text-sm text-gray-500" x-text="formatDate(account.registered_at)"></td>
+                                <td class="px-4 py-3">
+                                    <div class="flex gap-2">
+                                        <button @click="testAccount(account)" class="text-purple-500 hover:text-purple-700" title="测试账号" :disabled="account.testing">
+                                            <i class="fas" :class="account.testing ? 'fa-spinner fa-spin' : 'fa-vial'"></i>
+                                        </button>
+                                        <button @click="openOAuth(account)" class="text-blue-500 hover:text-blue-700" title="OAuth授权">
+                                            <i class="fas fa-key"></i>
+                                        </button>
+                                        <button @click="refreshToken(account)" class="text-green-500 hover:text-green-700" title="刷新Token" x-show="account.refresh_token">
+                                            <i class="fas fa-sync-alt"></i>
+                                        </button>
+                                        <button @click="viewAccount(account)" class="text-gray-500 hover:text-gray-700" title="查看详情">
+                                            <i class="fas fa-eye"></i>
+                                        </button>
+                                        <button @click="deleteAccount(account.id)" class="text-red-500 hover:text-red-700" title="删除">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+
+                <!-- 分页 -->
+                <div class="bg-gray-50 px-4 py-3 flex justify-between items-center">
+                    <div class="text-sm text-gray-600">
+                        共 <span x-text="pagination.total"></span> 条，第 <span x-text="pagination.page"></span>/<span x-text="pagination.total_pages"></span> 页
+                    </div>
+                    <div class="flex gap-2">
+                        <button @click="prevPage" :disabled="pagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-50">上一页</button>
+                        <button @click="nextPage" :disabled="pagination.page >= pagination.total_pages" class="px-3 py-1 border rounded disabled:opacity-50">下一页</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 详情弹窗 -->
+    <div x-show="showModal" x-cloak class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click.self="showModal=false">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] overflow-auto">
+            <div class="p-4 border-b flex justify-between items-center">
+                <h3 class="text-lg font-bold">账号详情</h3>
+                <button @click="showModal=false" class="text-gray-500 hover:text-gray-700">&times;</button>
+            </div>
+            <div class="p-4 space-y-4" x-show="currentAccount">
+                <div><strong>邮箱:</strong> <span x-text="currentAccount?.email"></span></div>
+                <div><strong>密码:</strong> <span x-text="currentAccount?.password"></span> <button @click="copyText(currentAccount?.password)" class="text-blue-500 text-sm">复制</button></div>
+                <div><strong>状态:</strong> <span x-text="statusText(currentAccount?.status)"></span></div>
+                <div><strong>Account ID:</strong> <span x-text="currentAccount?.account_id || '-'"></span></div>
+                <div x-show="currentAccount?.access_token">
+                    <strong>Access Token:</strong>
+                    <div class="mt-1 p-2 bg-gray-100 rounded text-xs break-all max-h-20 overflow-auto" x-text="currentAccount?.access_token?.substring(0,200)+'...'"></div>
+                    <button @click="copyText(currentAccount?.access_token)" class="text-blue-500 text-sm">复制完整Token</button>
+                </div>
+                <div x-show="currentAccount?.refresh_token">
+                    <strong>Refresh Token:</strong>
+                    <div class="mt-1 p-2 bg-gray-100 rounded text-xs break-all" x-text="currentAccount?.refresh_token"></div>
+                    <button @click="copyText(currentAccount?.refresh_token)" class="text-blue-500 text-sm">复制</button>
+                </div>
+                <div x-show="currentAccount?.checkout_url">
+                    <strong>绑卡链接:</strong>
+                    <a :href="currentAccount?.checkout_url" target="_blank" class="text-blue-500 hover:underline break-all" x-text="currentAccount?.checkout_url"></a>
+                </div>
+                <div><strong>注册时间:</strong> <span x-text="formatDate(currentAccount?.registered_at)"></span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- OAuth 授权模态框 -->
+    <div x-show="showOAuthModal" x-cloak class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click.self="showOAuthModal=false">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-xl">
+            <div class="p-4 border-b flex justify-between items-center">
+                <h3 class="text-lg font-bold">Codex OAuth 授权</h3>
+                <button @click="showOAuthModal=false" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+            </div>
+            <div class="p-4 space-y-4">
+                <!-- 步骤 1: 授权链接 -->
+                <div class="space-y-2">
+                    <label class="block font-medium text-gray-700">步骤 1: 打开授权链接</label>
+                    <div class="flex gap-2">
+                        <input type="text" readonly :value="oauthData.authUrl" class="flex-1 border rounded px-3 py-2 bg-gray-50 text-sm" />
+                        <button @click="copyText(oauthData.authUrl)" class="px-3 py-2 bg-gray-200 rounded hover:bg-gray-300" title="复制链接">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                        <a :href="oauthData.authUrl" target="_blank" class="px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600" title="在新标签页打开">
+                            <i class="fas fa-external-link-alt"></i>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- 步骤 2: 粘贴回调 URL -->
+                <div class="space-y-2">
+                    <label class="block font-medium text-gray-700">步骤 2: 登录后，复制浏览器地址栏的完整 URL</label>
+                    <p class="text-sm text-gray-500">登录完成后，浏览器会跳转到类似 <code class="bg-gray-100 px-1 rounded">http://localhost:1455/auth/callback?code=xxx&state=xxx</code> 的页面，请复制整个地址栏内容</p>
+                    <textarea x-model="oauthData.callbackUrl" placeholder="粘贴完整的回调 URL..." class="w-full border rounded px-3 py-2 h-24 text-sm" :disabled="oauthData.submitting"></textarea>
+                </div>
+
+                <!-- 状态显示 -->
+                <div x-show="oauthData.message" :class="oauthData.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'" class="p-3 rounded text-sm">
+                    <span x-text="oauthData.message"></span>
+                </div>
+
+                <!-- 提交按钮 -->
+                <div class="flex justify-end gap-2">
+                    <button @click="showOAuthModal=false" class="px-4 py-2 border rounded hover:bg-gray-50">取消</button>
+                    <button @click="submitOAuthCallback" class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50" :disabled="oauthData.submitting || !oauthData.callbackUrl">
+                        <span x-show="!oauthData.submitting">提交回调</span>
+                        <span x-show="oauthData.submitting"><i class="fas fa-spinner fa-spin"></i> 处理中...</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function app() {
+            return {
+                token: localStorage.getItem('token'),
+                currentUser: null,
+                loginForm: { username: '', password: '' },
+                loginError: '',
+                accounts: [],
+                stats: {},
+                filter: { search: '', status: '', has_rt: '', date_from: '', date_to: '', page: 1, page_size: 20 },
+                pagination: { total: 0, page: 1, page_size: 20, total_pages: 0 },
+                selectedIds: [],
+                showModal: false,
+                currentAccount: null,
+                batchTestTaskId: null,
+                testResults: {},
+                showOAuthModal: false,
+                oauthData: {
+                    accountId: null,
+                    authUrl: '',
+                    state: '',
+                    callbackUrl: '',
+                    submitting: false,
+                    message: '',
+                    success: false
+                },
+
+                async init() {
+                    if (this.token) {
+                        await this.loadCurrentUser();
+                        await this.loadStats();
+                        await this.loadAccounts();
+                    }
+                    // 监听 OAuth 回调消息
+                    window.addEventListener('message', (event) => {
+                        if (event.data?.type === 'oauth_success') {
+                            this.loadAccounts();
+                            this.loadStats();
+                            alert('OAuth 授权成功！');
+                        } else if (event.data?.type === 'oauth_error') {
+                            alert('OAuth 授权失败: ' + (event.data.error || '未知错误'));
+                        }
+                    });
+                },
+
+                async login() {
+                    try {
+                        const res = await fetch('/api/v1/auth/login', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.loginForm)
+                        });
+                        const data = await res.json();
+                        if (res.ok) {
+                            this.token = data.token;
+                            this.currentUser = data.user;
+                            localStorage.setItem('token', data.token);
+                            this.loginError = '';
+                            await this.init();
+                        } else {
+                            this.loginError = data.error || '登录失败';
+                        }
+                    } catch (e) {
+                        this.loginError = '网络错误';
+                    }
+                },
+
+                logout() {
+                    this.token = null;
+                    this.currentUser = null;
+                    localStorage.removeItem('token');
+                },
+
+                async api(url, options = {}) {
+                    options.headers = { ...options.headers, 'Authorization': `Bearer ${this.token}` };
+                    const res = await fetch(url, options);
+                    if (res.status === 401) { this.logout(); return null; }
+                    return res.json();
+                },
+
+                async loadCurrentUser() {
+                    this.currentUser = await this.api('/api/v1/auth/me');
+                },
+
+                async loadStats() {
+                    this.stats = await this.api('/api/v1/accounts/stats') || {};
+                },
+
+                async loadAccounts() {
+                    const params = new URLSearchParams(this.filter);
+                    const data = await this.api('/api/v1/accounts?' + params);
+                    if (data) {
+                        this.accounts = data.data || [];
+                        this.pagination = { total: data.total, page: data.page, page_size: data.page_size, total_pages: data.total_pages };
+                    }
+                },
+
+                resetFilter() {
+                    this.filter = { search: '', status: '', has_rt: '', date_from: '', date_to: '', page: 1, page_size: 20 };
+                    this.loadAccounts();
+                },
+
+                prevPage() { if (this.filter.page > 1) { this.filter.page--; this.loadAccounts(); } },
+                nextPage() { if (this.filter.page < this.pagination.total_pages) { this.filter.page++; this.loadAccounts(); } },
+
+                get isAllSelected() { return this.accounts.length > 0 && this.selectedIds.length === this.accounts.length; },
+                toggleSelectAll(e) { this.selectedIds = e.target.checked ? this.accounts.map(a => a.id) : []; },
+
+                async deleteAccount(id) {
+                    if (!confirm('确定删除?')) return;
+                    await this.api(`/api/v1/accounts/${id}`, { method: 'DELETE' });
+                    this.loadAccounts();
+                    this.loadStats();
+                },
+
+                async batchDelete() {
+                    if (!confirm(`确定删除 ${this.selectedIds.length} 个账号?`)) return;
+                    await this.api('/api/v1/accounts/batch-delete', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids: this.selectedIds })
+                    });
+                    this.selectedIds = [];
+                    this.loadAccounts();
+                    this.loadStats();
+                },
+
+                async batchUpdateStatus(status) {
+                    await this.api('/api/v1/accounts/batch-status', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids: this.selectedIds, status })
+                    });
+                    this.selectedIds = [];
+                    this.loadAccounts();
+                    this.loadStats();
+                },
+
+                viewAccount(account) { this.currentAccount = account; this.showModal = true; },
+
+                async openOAuth(account) {
+                    // 重置 OAuth 数据
+                    this.oauthData = {
+                        accountId: account.id,
+                        authUrl: '',
+                        state: '',
+                        callbackUrl: '',
+                        submitting: false,
+                        message: '',
+                        success: false
+                    };
+
+                    const res = await this.api('/api/v1/oauth/codex/start', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ account_id: account.id })
+                    });
+                    if (!res || res.error || !res.url) {
+                        alert(res?.error || 'Failed to start OAuth flow');
+                        return;
+                    }
+
+                    this.oauthData.authUrl = res.url;
+                    this.oauthData.state = res.state;
+                    this.showOAuthModal = true;
+                },
+
+                async submitOAuthCallback() {
+                    if (!this.oauthData.callbackUrl || !this.oauthData.state) {
+                        this.oauthData.message = '请粘贴回调 URL';
+                        this.oauthData.success = false;
+                        return;
+                    }
+
+                    this.oauthData.submitting = true;
+                    this.oauthData.message = '';
+
+                    try {
+                        const res = await this.api('/api/v1/oauth/codex/callback', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                callback_url: this.oauthData.callbackUrl,
+                                state: this.oauthData.state
+                            })
+                        });
+
+                        if (res && !res.error) {
+                            this.oauthData.success = true;
+                            this.oauthData.message = '授权成功！账号已更新。';
+                            await this.loadAccounts();
+                            await this.loadStats();
+                            setTimeout(() => {
+                                this.showOAuthModal = false;
+                            }, 1500);
+                        } else {
+                            this.oauthData.success = false;
+                            this.oauthData.message = res?.error || '授权失败';
+                        }
+                    } catch (e) {
+                        this.oauthData.success = false;
+                        this.oauthData.message = '请求失败: ' + e.message;
+                    } finally {
+                        this.oauthData.submitting = false;
+                    }
+                },
+
+                async testAccount(account) {
+                    account.testing = true;
+                    try {
+                        const res = await this.api(`/api/v1/accounts/${account.id}/test`, { method: 'POST' });
+                        if (res) {
+                            this.testResults[account.id] = res;
+                            account.status = res.status;
+                            const statusMsg = res.valid ? '✅ 有效' : '❌ 无效';
+                            alert(`测试结果: ${statusMsg}\n${res.message}\n${res.models?.length ? '可用模型: ' + res.models.join(', ') : ''}`);
+                            this.loadStats();
+                        }
+                    } catch (e) {
+                        alert('测试失败: ' + e.message);
+                    } finally {
+                        account.testing = false;
+                    }
+                },
+
+                async batchTestAccounts() {
+                    if (this.selectedIds.length === 0) return;
+                    const res = await this.api('/api/v1/accounts/batch-test', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ids: this.selectedIds })
+                    });
+                    if (res?.task_id) {
+                        this.batchTestTaskId = res.task_id;
+                        alert(`批量测试已开始，任务ID: ${res.task_id}`);
+                        this.pollBatchTestResult();
+                    }
+                },
+
+                async pollBatchTestResult() {
+                    if (!this.batchTestTaskId) return;
+                    const poll = async () => {
+                        const res = await this.api(`/api/v1/accounts/batch-test/${this.batchTestTaskId}`);
+                        if (res) {
+                            if (!res.in_progress) {
+                                const valid = res.results.filter(r => r.valid).length;
+                                alert(`批量测试完成！\n总计: ${res.total}\n有效: ${valid}\n无效: ${res.total - valid}`);
+                                this.batchTestTaskId = null;
+                                this.loadAccounts();
+                                this.loadStats();
+                            } else {
+                                setTimeout(poll, 2000);
+                            }
+                        }
+                    };
+                    poll();
+                },
+
+                async refreshToken(account) {
+                    try {
+                        const res = await this.api(`/api/v1/accounts/${account.id}/refresh`, { method: 'POST' });
+                        if (res?.message) {
+                            alert(res.message);
+                            this.loadAccounts();
+                        } else if (res?.error) {
+                            alert('刷新失败: ' + res.error);
+                        }
+                    } catch (e) {
+                        alert('刷新失败: ' + e.message);
+                    }
+                },
+
+                copyText(text) {
+                    navigator.clipboard.writeText(text);
+                },
+
+                statusText(status) {
+                    const map = { pending: '待处理', active: '已激活', failed: '失败', expired: '已过期', banned: '被封禁', rate_limited: '限流' };
+                    return map[status] || status;
+                },
+
+                formatDate(date) {
+                    if (!date) return '-';
+                    return new Date(date).toLocaleString('zh-CN');
+                }
+            }
+        }
+    </script>
+</body>
+</html>

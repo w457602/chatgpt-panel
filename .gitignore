@@ -1,0 +1,29 @@
+# Go build outputs
+dist/
+bin/
+.cache/
+tmp/
+*.test
+*.out
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# Local data/temporary files
+chatgpt_accounts_api.json
+chatgpt_accounts_check_url.txt
+.tmp-cloudflared.yml
