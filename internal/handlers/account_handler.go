@@ -1,12 +1,22 @@
 package handlers
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/webauto/chatgpt-panel/internal/models"
 	"github.com/webauto/chatgpt-panel/internal/services"
+	"gorm.io/gorm"
 )
 
 type AccountHandler struct {
@@ -222,30 +232,322 @@ func (h *AccountHandler) GetStats(c *gin.Context) {
 }
 
 func (h *AccountHandler) Import(c *gin.Context) {
-	var req models.CreateAccountRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	payloads, err := decodeImportPayloads(c.Request.Body)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	account := &models.Account{
-		Email:          req.Email,
-		Password:       req.Password,
-		AccessToken:    req.AccessToken,
-		RefreshToken:   req.RefreshToken,
-		CheckoutURL:    req.CheckoutURL,
-		AccountID:      req.AccountID,
-		SessionCookies: req.SessionCookies,
-		Status:         req.Status,
-		Name:           req.Name,
-	}
-
-	if err := h.accountService.CreateOrUpdate(account); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	if len(payloads) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Empty import payload"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Account imported", "id": account.ID})
+	var (
+		imported    int
+		errMessages []string
+		lastAccount *models.Account
+	)
+
+	for i, payload := range payloads {
+		account, meta, err := normalizeImportPayload(payload)
+		if err != nil {
+			errMessages = append(errMessages, fmt.Sprintf("item %d: %v", i+1, err))
+			continue
+		}
+
+		existing, err := h.accountService.GetByEmail(account.Email)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			errMessages = append(errMessages, fmt.Sprintf("item %d: %v", i+1, err))
+			continue
+		}
+
+		if err == nil && existing != nil {
+			merged := mergeImportedAccount(existing, account, meta)
+			if !meta.HasStatus && account.AccessToken != "" {
+				merged.Status = "active"
+			}
+			if err := h.accountService.Update(merged); err != nil {
+				errMessages = append(errMessages, fmt.Sprintf("item %d: %v", i+1, err))
+				continue
+			}
+			lastAccount = merged
+		} else {
+			applyImportDefaults(account, meta)
+			if err := h.accountService.Create(account); err != nil {
+				errMessages = append(errMessages, fmt.Sprintf("item %d: %v", i+1, err))
+				continue
+			}
+			lastAccount = account
+		}
+
+		imported++
+	}
+
+	if len(payloads) == 1 && imported == 1 && lastAccount != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "Account imported", "id": lastAccount.ID})
+		return
+	}
+
+	response := gin.H{
+		"message":  "Accounts imported",
+		"imported": imported,
+		"failed":   len(errMessages),
+	}
+	if len(errMessages) > 0 {
+		response["errors"] = errMessages
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+type importAccountPayload struct {
+	Email          string          `json:"email"`
+	Password       string          `json:"password"`
+	AccessToken    string          `json:"access_token"`
+	RefreshToken   string          `json:"refresh_token"`
+	CheckoutURL    string          `json:"checkout_url"`
+	AccountID      string          `json:"account_id"`
+	SessionCookies json.RawMessage `json:"session_cookies"`
+	Cookies        json.RawMessage `json:"cookies"`
+	Status         string          `json:"status"`
+	Name           string          `json:"name"`
+	CreatedAt      string          `json:"created_at"`
+	LastRefresh    string          `json:"last_refresh"`
+	Expired        string          `json:"expired"`
+	Type           string          `json:"type"`
+	Notes          string          `json:"notes"`
+}
+
+type importAccountMeta struct {
+	HasPassword     bool
+	HasStatus       bool
+	HasCookies      bool
+	HasNotes        bool
+	HasRegisteredAt bool
+}
+
+func decodeImportPayloads(r io.Reader) ([]importAccountPayload, error) {
+	reader := bufio.NewReader(r)
+	for {
+		b, err := reader.Peek(1)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		if unicode.IsSpace(rune(b[0])) {
+			_, _ = reader.ReadByte()
+			continue
+		}
+		if b[0] == '[' {
+			var payloads []importAccountPayload
+			dec := json.NewDecoder(reader)
+			if err := dec.Decode(&payloads); err != nil {
+				return nil, err
+			}
+			return payloads, nil
+		}
+
+		var payloads []importAccountPayload
+		dec := json.NewDecoder(reader)
+		for {
+			var item importAccountPayload
+			if err := dec.Decode(&item); err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return nil, err
+			}
+			payloads = append(payloads, item)
+		}
+		return payloads, nil
+	}
+}
+
+func normalizeImportPayload(payload importAccountPayload) (*models.Account, importAccountMeta, error) {
+	meta := importAccountMeta{}
+	email := strings.TrimSpace(payload.Email)
+	if email == "" {
+		return nil, meta, errors.New("email is required")
+	}
+
+	account := &models.Account{
+		Email:       email,
+		AccessToken: strings.TrimSpace(payload.AccessToken),
+		RefreshToken: strings.TrimSpace(payload.RefreshToken),
+		CheckoutURL: strings.TrimSpace(payload.CheckoutURL),
+		AccountID:   strings.TrimSpace(payload.AccountID),
+		Name:        strings.TrimSpace(payload.Name),
+	}
+
+	password := strings.TrimSpace(payload.Password)
+	if password != "" {
+		account.Password = password
+		meta.HasPassword = true
+	}
+
+	status := strings.ToLower(strings.TrimSpace(payload.Status))
+	if status != "" {
+		if !isValidImportStatus(status) {
+			return nil, meta, fmt.Errorf("invalid status: %s", status)
+		}
+		account.Status = status
+		meta.HasStatus = true
+	}
+
+	sessionCookies := payload.SessionCookies
+	if isNullJSON(sessionCookies) || len(sessionCookies) == 0 {
+		sessionCookies = payload.Cookies
+	}
+	if !isNullJSON(sessionCookies) && len(sessionCookies) != 0 {
+		account.SessionCookies = sessionCookies
+		meta.HasCookies = true
+	}
+
+	notes := strings.TrimSpace(payload.Notes)
+	planType := strings.TrimSpace(payload.Type)
+	if planType != "" {
+		typeNote := "plan=" + planType
+		if notes == "" {
+			notes = typeNote
+		} else if !strings.Contains(notes, typeNote) {
+			notes = notes + "; " + typeNote
+		}
+	}
+	if notes != "" {
+		account.Notes = notes
+		meta.HasNotes = true
+	}
+
+	if payload.CreatedAt != "" {
+		createdAt, err := parseImportTime(payload.CreatedAt)
+		if err != nil {
+			return nil, meta, fmt.Errorf("created_at: %w", err)
+		}
+		account.RegisteredAt = *createdAt
+		account.CreatedAt = *createdAt
+		meta.HasRegisteredAt = true
+	}
+
+	if payload.LastRefresh != "" {
+		lastRefresh, err := parseImportTime(payload.LastRefresh)
+		if err != nil {
+			return nil, meta, fmt.Errorf("last_refresh: %w", err)
+		}
+		account.UpdatedAt = *lastRefresh
+	}
+
+	if payload.Expired != "" {
+		expiredAt, err := parseImportTime(payload.Expired)
+		if err != nil {
+			return nil, meta, fmt.Errorf("expired: %w", err)
+		}
+		account.TokenExpired = expiredAt
+	}
+
+	return account, meta, nil
+}
+
+func applyImportDefaults(account *models.Account, meta importAccountMeta) {
+	if !meta.HasPassword || account.Password == "" {
+		account.Password = "imported"
+	}
+	if account.Status == "" {
+		if account.AccessToken != "" {
+			account.Status = "active"
+		} else {
+			account.Status = "pending"
+		}
+	}
+}
+
+func mergeImportedAccount(existing *models.Account, incoming *models.Account, meta importAccountMeta) *models.Account {
+	merged := *existing
+
+	if incoming.AccessToken != "" {
+		merged.AccessToken = incoming.AccessToken
+	}
+	if incoming.RefreshToken != "" {
+		merged.RefreshToken = incoming.RefreshToken
+	}
+	if incoming.CheckoutURL != "" {
+		merged.CheckoutURL = incoming.CheckoutURL
+	}
+	if incoming.AccountID != "" {
+		merged.AccountID = incoming.AccountID
+	}
+	if incoming.Name != "" {
+		merged.Name = incoming.Name
+	}
+	if !incoming.RegisteredAt.IsZero() {
+		merged.RegisteredAt = incoming.RegisteredAt
+	}
+	if incoming.TokenExpired != nil {
+		merged.TokenExpired = incoming.TokenExpired
+	}
+	if meta.HasCookies {
+		merged.SessionCookies = incoming.SessionCookies
+	}
+	if meta.HasPassword {
+		merged.Password = incoming.Password
+	}
+	if meta.HasStatus {
+		merged.Status = incoming.Status
+	}
+	if meta.HasNotes {
+		merged.Notes = mergeImportNotes(existing.Notes, incoming.Notes)
+	}
+
+	return &merged
+}
+
+func mergeImportNotes(existing string, incoming string) string {
+	if incoming == "" {
+		return existing
+	}
+	if existing == "" {
+		return incoming
+	}
+	if strings.Contains(existing, incoming) {
+		return existing
+	}
+	return existing + "; " + incoming
+}
+
+func isNullJSON(raw json.RawMessage) bool {
+	return len(raw) != 0 && bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+func isValidImportStatus(status string) bool {
+	switch status {
+	case "pending", "active", "failed", "expired":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseImportTime(value string) (*time.Time, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	layoutsWithZone := []string{time.RFC3339Nano, time.RFC3339}
+	for _, layout := range layoutsWithZone {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return &parsed, nil
+		}
+	}
+	layoutsNoZone := []string{
+		"2006-01-02T15:04:05.999999",
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layoutsNoZone {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return &parsed, nil
+		}
+	}
+	return nil, fmt.Errorf("unsupported time format: %s", value)
 }
 
 // TestAccount 测试单个账号
@@ -344,4 +646,3 @@ func (h *AccountHandler) RefreshAccountToken(c *gin.Context) {
 		"access_token": result.AccessToken[:50] + "...",
 	})
 }
-

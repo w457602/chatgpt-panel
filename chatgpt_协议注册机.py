@@ -45,6 +45,12 @@ class Config:
     # 请求超时
     TIMEOUT = 30
 
+    # 面板导入（Zeabur 部署地址）
+    PANEL_BASE = "https://chatgptpanel.zeabur.app"
+    PANEL_USERNAME = "admin"
+    PANEL_PASSWORD = "admin123"
+    PANEL_IMPORT_ENABLED = True
+
     # 浏览器指纹
     IMPERSONATE = "chrome120"
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -902,6 +908,8 @@ class ChatGPTRegister:
         self.lock = threading.Lock()
         self.stop_flag = False
         self.save_lock = threading.Lock()
+        self.panel_token = None
+        self.panel_lock = threading.Lock()
 
     def _create_mail_client(self) -> MailClient:
         """为每个线程创建独立的邮箱客户端"""
@@ -1057,6 +1065,73 @@ class ChatGPTRegister:
                     print(f"💳 绑卡链接已保存到 chatgpt_accounts_check_url.txt")
             except Exception as e:
                 print(f"⚠️ 保存账号失败: {e}")
+
+        if Config.PANEL_IMPORT_ENABLED:
+            self._import_to_panel(account, checkout_url)
+
+    def _get_panel_token(self) -> Optional[str]:
+        """获取面板登录 token（缓存）"""
+        if self.panel_token:
+            return self.panel_token
+
+        with self.panel_lock:
+            if self.panel_token:
+                return self.panel_token
+            try:
+                resp = requests.post(
+                    f"{Config.PANEL_BASE}/api/v1/auth/login",
+                    json={"username": Config.PANEL_USERNAME, "password": Config.PANEL_PASSWORD},
+                    timeout=Config.TIMEOUT,
+                )
+                if resp.status_code != 200:
+                    print(f"⚠️ 面板登录失败: {resp.status_code} - {resp.text[:200]}")
+                    return None
+                data = resp.json()
+                token = data.get("token")
+                if not token:
+                    print("⚠️ 面板登录未返回 token")
+                    return None
+                self.panel_token = token
+                return token
+            except Exception as e:
+                print(f"⚠️ 面板登录异常: {e}")
+                return None
+
+    def _import_to_panel(self, account: Dict, checkout_url: Optional[str]):
+        """导入账号到面板"""
+        token = self._get_panel_token()
+        if not token:
+            return
+
+        payload = {
+            "email": account.get("email", ""),
+            "password": Config.DEFAULT_PASSWORD,
+            "access_token": account.get("access_token", ""),
+            "refresh_token": account.get("refresh_token", ""),
+            "checkout_url": checkout_url or "",
+            "account_id": account.get("account_id", ""),
+            "session_cookies": account.get("cookies", []),
+            "status": "active" if account.get("access_token") else "pending",
+            "name": account.get("name", ""),
+            "created_at": account.get("created_at", ""),
+            "last_refresh": account.get("last_refresh", ""),
+            "expired": account.get("expired", ""),
+            "type": account.get("type", ""),
+        }
+
+        try:
+            resp = requests.post(
+                f"{Config.PANEL_BASE}/api/v1/accounts/import",
+                headers={"Authorization": f"Bearer {token}"},
+                json=payload,
+                timeout=Config.TIMEOUT,
+            )
+            if resp.status_code != 200:
+                print(f"⚠️ 面板导入失败: {resp.status_code} - {resp.text[:200]}")
+                return
+            print("✅ 已导入面板")
+        except Exception as e:
+            print(f"⚠️ 面板导入异常: {e}")
 
     def _worker_thread(self, thread_id: int, target_count: int):
         """工作线程函数"""
