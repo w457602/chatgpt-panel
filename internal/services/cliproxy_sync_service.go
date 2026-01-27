@@ -235,8 +235,6 @@ func extractAccountIDFromAuthClaim(value interface{}) string {
 	switch v := value.(type) {
 	case map[string]interface{}:
 		return stringValue(v["chatgpt_account_id"])
-	case map[string]any:
-		return stringValue(v["chatgpt_account_id"])
 	case string:
 		var parsed map[string]interface{}
 		if err := json.Unmarshal([]byte(v), &parsed); err == nil {
