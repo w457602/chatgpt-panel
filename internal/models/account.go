@@ -9,23 +9,26 @@ import (
 
 // Account ChatGPT账号模型
 type Account struct {
-	ID             uint            `gorm:"primaryKey" json:"id"`
-	Email          string          `gorm:"uniqueIndex;size:255;not null" json:"email"`
-	Password       string          `gorm:"size:255;not null" json:"password"`
-	AccessToken    string          `gorm:"type:text" json:"access_token"`
-	RefreshToken   string          `gorm:"type:text" json:"refresh_token"`
-	CheckoutURL    string          `gorm:"size:1000" json:"checkout_url"`
-	AccountID      string          `gorm:"index;size:100" json:"account_id"`
-	TokenExpired   *time.Time      `json:"token_expired"`
-	SessionCookies json.RawMessage `gorm:"type:jsonb" json:"session_cookies"`
-	Status         string          `gorm:"index;size:50;default:pending" json:"status"` // pending, active, failed, expired
-	Name           string          `gorm:"size:100" json:"name"`
-	Notes          string          `gorm:"type:text" json:"notes"`
-	RegisteredAt   time.Time       `gorm:"index" json:"registered_at"`
-	LastUsedAt     *time.Time      `json:"last_used_at"`
-	CreatedAt      time.Time       `json:"created_at"`
-	UpdatedAt      time.Time       `json:"updated_at"`
-	DeletedAt      gorm.DeletedAt  `gorm:"index" json:"-"`
+	ID                 uint            `gorm:"primaryKey" json:"id"`
+	Email              string          `gorm:"uniqueIndex;size:255;not null" json:"email"`
+	Password           string          `gorm:"size:255;not null" json:"password"`
+	AccessToken        string          `gorm:"type:text" json:"access_token"`
+	RefreshToken       string          `gorm:"type:text" json:"refresh_token"`
+	CheckoutURL        string          `gorm:"size:1000" json:"checkout_url"`
+	AccountID          string          `gorm:"index;size:100" json:"account_id"`
+	SubscriptionStatus string          `gorm:"index;size:50" json:"subscription_status"`
+	TokenExpired       *time.Time      `json:"token_expired"`
+	CliproxySynced     bool            `gorm:"default:false" json:"cliproxy_synced"`
+	CliproxySyncedAt   *time.Time      `json:"cliproxy_synced_at"`
+	SessionCookies     json.RawMessage `gorm:"type:jsonb" json:"session_cookies"`
+	Status             string          `gorm:"index;size:50;default:pending" json:"status"` // pending, active, failed, expired
+	Name               string          `gorm:"size:100" json:"name"`
+	Notes              string          `gorm:"type:text" json:"notes"`
+	RegisteredAt       time.Time       `gorm:"index" json:"registered_at"`
+	LastUsedAt         *time.Time      `json:"last_used_at"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
+	DeletedAt          gorm.DeletedAt  `gorm:"index" json:"-"`
 }
 
 func (Account) TableName() string {
@@ -80,19 +83,19 @@ type PaginatedResult struct {
 
 // CreateAccountRequest 创建账号请求
 type CreateAccountRequest struct {
-	Email          string          `json:"email" binding:"required,email"`
-	Password       string          `json:"password" binding:"required"`
-	AccessToken    string          `json:"access_token"`
-	RefreshToken   string          `json:"refresh_token"`
-	CheckoutURL    string          `json:"checkout_url"`
-	AccountID      string          `json:"account_id"`
-	SessionCookies json.RawMessage `json:"session_cookies"`
-	Status         string          `json:"status"`
-	Name           string          `json:"name"`
+	Email              string          `json:"email" binding:"required,email"`
+	Password           string          `json:"password" binding:"required"`
+	AccessToken        string          `json:"access_token"`
+	RefreshToken       string          `json:"refresh_token"`
+	CheckoutURL        string          `json:"checkout_url"`
+	AccountID          string          `json:"account_id"`
+	SubscriptionStatus string          `json:"subscription_status"`
+	SessionCookies     json.RawMessage `json:"session_cookies"`
+	Status             string          `json:"status"`
+	Name               string          `json:"name"`
 }
 
 // UpdateRefreshTokenRequest 更新 RT 请求
 type UpdateRefreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
 }
-

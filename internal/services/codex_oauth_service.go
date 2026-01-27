@@ -56,6 +56,7 @@ type idTokenClaims struct {
 	Email string `json:"email"`
 	Auth  struct {
 		ChatgptAccountID string `json:"chatgpt_account_id"`
+		ChatgptPlanType  string `json:"chatgpt_plan_type"`
 	} `json:"https://api.openai.com/auth"`
 }
 
@@ -254,6 +255,8 @@ func (s *CodexOAuthService) updateAccount(accountID uint, token *codexTokenRespo
 		return fmt.Errorf("account not found: %w", err)
 	}
 
+	planType := NormalizeSubscriptionStatus(parsePlanFromIDToken(token.IDToken))
+
 	if tokenEmail != "" && !strings.EqualFold(account.Email, tokenEmail) {
 		return fmt.Errorf("email mismatch: token=%s account=%s", tokenEmail, account.Email)
 	}
@@ -270,6 +273,10 @@ func (s *CodexOAuthService) updateAccount(accountID uint, token *codexTokenRespo
 	if tokenAccountID != "" {
 		updates["account_id"] = tokenAccountID
 		account.AccountID = tokenAccountID
+	}
+	if planType != "" {
+		updates["subscription_status"] = planType
+		account.SubscriptionStatus = planType
 	}
 	if token.ExpiresIn > 0 {
 		expiresAt := time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
@@ -532,6 +539,25 @@ func parseIDToken(token string) (string, string) {
 		return "", ""
 	}
 	return claims.Email, claims.Auth.ChatgptAccountID
+}
+
+func parsePlanFromIDToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64URLDecode(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims idTokenClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	return claims.Auth.ChatgptPlanType
 }
 
 func base64URLDecode(data string) ([]byte, error) {

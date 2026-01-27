@@ -16,23 +16,23 @@ import (
 )
 
 const (
-	chatgptBaseURL     = "https://chatgpt.com"
-	openaiTokenURL     = "https://auth.openai.com/oauth/token"
-	openaiClientID     = "app_EMoamEEZ73f0CkXaXp7hrann"
-	testTimeout        = 15 * time.Second
-	batchConcurrency   = 5
+	chatgptBaseURL   = "https://chatgpt.com"
+	openaiTokenURL   = "https://auth.openai.com/oauth/token"
+	openaiClientID   = "app_EMoamEEZ73f0CkXaXp7hrann"
+	testTimeout      = 15 * time.Second
+	batchConcurrency = 5
 )
 
 // AccountTestResult 账号测试结果
 type AccountTestResult struct {
-	ID           uint      `json:"id"`
-	Email        string    `json:"email"`
-	Status       string    `json:"status"`  // active, expired, banned, error
-	Valid        bool      `json:"valid"`
-	Message      string    `json:"message"`
-	Models       []string  `json:"models,omitempty"`
-	TokenRefreshed bool    `json:"token_refreshed,omitempty"`
-	TestedAt     time.Time `json:"tested_at"`
+	ID             uint      `json:"id"`
+	Email          string    `json:"email"`
+	Status         string    `json:"status"` // active, expired, banned, error
+	Valid          bool      `json:"valid"`
+	Message        string    `json:"message"`
+	Models         []string  `json:"models,omitempty"`
+	TokenRefreshed bool      `json:"token_refreshed,omitempty"`
+	TestedAt       time.Time `json:"tested_at"`
 }
 
 // BatchTestResult 批量测试结果
@@ -57,7 +57,7 @@ type RefreshTokenResult struct {
 type AccountTestService struct {
 	db         *gorm.DB
 	httpClient *http.Client
-	
+
 	// 批量测试任务管理
 	mu         sync.RWMutex
 	batchTasks map[string]*BatchTestResult
@@ -113,7 +113,7 @@ func (s *AccountTestService) TestAccount(ctx context.Context, id uint) (*Account
 
 	// 调用 ChatGPT API 测试 token 有效性
 	testResult := s.testAccessToken(ctx, account.AccessToken)
-	
+
 	if testResult.Valid {
 		result.Status = "active"
 		result.Valid = true
@@ -251,6 +251,13 @@ func (s *AccountTestService) updateAccountTokens(id uint, tokens *RefreshTokenRe
 		"access_token": tokens.AccessToken,
 		"status":       "active",
 	}
+	if tokens.IDToken != "" {
+		if plan := ExtractSubscriptionStatusFromToken(tokens.IDToken); plan != "" {
+			updates["subscription_status"] = plan
+		}
+	} else if plan := ExtractSubscriptionStatusFromToken(tokens.AccessToken); plan != "" {
+		updates["subscription_status"] = plan
+	}
 	if tokens.RefreshToken != "" {
 		updates["refresh_token"] = tokens.RefreshToken
 	}
@@ -366,4 +373,3 @@ func (s *AccountTestService) CleanupOldTasks() {
 		}
 	}
 }
-

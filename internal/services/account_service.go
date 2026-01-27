@@ -71,8 +71,10 @@ func (s *AccountService) BatchUpdateStatus(ids []uint, status string) error {
 
 func (s *AccountService) UpdateRefreshToken(id uint, refreshToken string) error {
 	return s.db.Model(&models.Account{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"refresh_token": refreshToken,
-		"updated_at":    time.Now(),
+		"refresh_token":      refreshToken,
+		"cliproxy_synced":    false,
+		"cliproxy_synced_at": nil,
+		"updated_at":         time.Now(),
 	}).Error
 }
 
@@ -154,6 +156,15 @@ func (s *AccountService) List(filter models.AccountFilter) (*models.PaginatedRes
 		totalPages++
 	}
 
+	for i := range accounts {
+		if accounts[i].AccessToken != "" {
+			if plan := ExtractSubscriptionStatusFromToken(accounts[i].AccessToken); plan != "" && plan != accounts[i].SubscriptionStatus {
+				accounts[i].SubscriptionStatus = plan
+				_ = s.db.Model(&models.Account{}).Where("id = ?", accounts[i].ID).Update("subscription_status", plan).Error
+			}
+		}
+	}
+
 	return &models.PaginatedResult{
 		Data:       accounts,
 		Total:      total,
@@ -210,4 +221,3 @@ func (s *AccountService) GetStats() (*models.AccountStats, error) {
 
 	return stats, nil
 }
-

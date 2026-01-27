@@ -121,34 +121,26 @@
                     <thead class="bg-gray-50">
                         <tr>
                             <th class="px-4 py-3"><input type="checkbox" @change="toggleSelectAll" :checked="isAllSelected"></th>
+                            <th class="px-4 py-3 text-left">序号</th>
                             <th class="px-4 py-3 text-left">邮箱</th>
-                            <th class="px-4 py-3 text-left">密码</th>
-                            <th class="px-4 py-3 text-left">状态</th>
+                            <th class="px-4 py-3 text-left">订阅状态</th>
                             <th class="px-4 py-3 text-left">RT</th>
                             <th class="px-4 py-3 text-left">绑卡链接</th>
+                            <th class="px-4 py-3 text-left">已同步</th>
                             <th class="px-4 py-3 text-left">注册时间</th>
                             <th class="px-4 py-3 text-left">操作</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <template x-for="account in accounts" :key="account.id">
+                        <template x-for="(account, index) in accounts" :key="account.id">
                             <tr class="border-t hover:bg-gray-50">
                                 <td class="px-4 py-3"><input type="checkbox" :value="account.id" x-model="selectedIds"></td>
+                                <td class="px-4 py-3 text-sm text-gray-500" x-text="(pagination.page - 1) * pagination.page_size + index + 1"></td>
                                 <td class="px-4 py-3 truncate-cell" :title="account.email">
                                     <span class="cursor-pointer" @click="copyText(account.email)" x-text="account.email"></span>
                                 </td>
                                 <td class="px-4 py-3">
-                                    <span class="cursor-pointer" @click="copyText(account.password)" title="点击复制">••••••</span>
-                                </td>
-                                <td class="px-4 py-3">
-                                    <span class="px-2 py-1 rounded text-xs"
-                                        :class="{
-                                            'bg-yellow-100 text-yellow-800': account.status === 'pending',
-                                            'bg-green-100 text-green-800': account.status === 'active',
-                                            'bg-red-100 text-red-800': account.status === 'failed',
-                                            'bg-gray-100 text-gray-800': account.status === 'expired'
-                                        }"
-                                        x-text="statusText(account.status)"></span>
+                                    <span class="px-2 py-1 rounded text-xs bg-gray-100 text-gray-800" x-text="subscriptionText(account.subscription_status)"></span>
                                 </td>
                                 <td class="px-4 py-3">
                                     <span x-show="account.refresh_token" class="text-green-500"><i class="fas fa-check"></i></span>
@@ -157,6 +149,10 @@
                                 <td class="px-4 py-3">
                                     <button x-show="account.checkout_url" @click="openExternal(account.checkout_url)" class="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600">绑卡</button>
                                     <span x-show="!account.checkout_url" class="text-gray-300">-</span>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <span x-show="account.cliproxy_synced" class="text-green-500"><i class="fas fa-check"></i></span>
+                                    <span x-show="!account.cliproxy_synced" class="text-gray-300"><i class="fas fa-times"></i></span>
                                 </td>
                                 <td class="px-4 py-3 text-sm text-gray-500" x-text="formatDate(account.registered_at)"></td>
                                 <td class="px-4 py-3">
@@ -207,7 +203,9 @@
             <div class="p-4 space-y-4" x-show="currentAccount">
                 <div><strong>邮箱:</strong> <span x-text="currentAccount?.email"></span></div>
                 <div><strong>密码:</strong> <span x-text="currentAccount?.password"></span> <button @click="copyText(currentAccount?.password)" class="text-blue-500 text-sm">复制</button></div>
-                <div><strong>状态:</strong> <span x-text="statusText(currentAccount?.status)"></span></div>
+                <div><strong>账号状态:</strong> <span x-text="statusText(currentAccount?.status)"></span></div>
+                <div><strong>订阅状态:</strong> <span x-text="subscriptionText(currentAccount?.subscription_status)"></span></div>
+                <div><strong>已同步到 CLIProxyAPI:</strong> <span x-text="currentAccount?.cliproxy_synced ? '是' : '否'"></span></div>
                 <div><strong>Account ID:</strong> <span x-text="currentAccount?.account_id || '-'"></span></div>
                 <div x-show="currentAccount?.access_token">
                     <strong>Access Token:</strong>
@@ -686,6 +684,12 @@
                 statusText(status) {
                     const map = { pending: '待处理', active: '已激活', failed: '失败', expired: '已过期', banned: '被封禁', rate_limited: '限流' };
                     return map[status] || status;
+                },
+
+                subscriptionText(status) {
+                    const value = (status || '').toLowerCase();
+                    const map = { free: '免费', plus: 'Plus', team: 'Team', business: 'Business' };
+                    return map[value] || (status || '-');
                 },
 
                 formatDate(date) {

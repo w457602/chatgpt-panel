@@ -97,6 +97,9 @@ func (s *CliproxySyncService) SyncAccount(ctx context.Context, account *models.A
 	if s == nil || !s.enabled || account == nil {
 		return nil
 	}
+	if !s.Eligible(account) {
+		return nil
+	}
 	if strings.TrimSpace(account.RefreshToken) == "" {
 		return nil
 	}
@@ -138,7 +141,39 @@ func (s *CliproxySyncService) SyncAccount(ctx context.Context, account *models.A
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return fmt.Errorf("cliproxy import failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
+	s.markSynced(account)
 	return nil
+}
+
+func (s *CliproxySyncService) Eligible(account *models.Account) bool {
+	if account == nil {
+		return false
+	}
+	status := ""
+	if account.AccessToken != "" {
+		status = ExtractSubscriptionStatusFromToken(account.AccessToken)
+	}
+	if status == "" {
+		status = NormalizeSubscriptionStatus(account.SubscriptionStatus)
+	}
+	return IsCliproxyEligibleSubscription(status)
+}
+
+func (s *CliproxySyncService) markSynced(account *models.Account) {
+	if account == nil || account.ID == 0 {
+		return
+	}
+	now := time.Now().UTC()
+	updates := map[string]interface{}{
+		"cliproxy_synced":    true,
+		"cliproxy_synced_at": &now,
+	}
+	if err := models.GetDB().Model(&models.Account{}).Where("id = ?", account.ID).Updates(updates).Error; err != nil {
+		log.Printf("cliproxy sync update failed: %v", err)
+		return
+	}
+	account.CliproxySynced = true
+	account.CliproxySyncedAt = &now
 }
 
 func (s *CliproxySyncService) buildPayload(account *models.Account) (map[string]interface{}, error) {

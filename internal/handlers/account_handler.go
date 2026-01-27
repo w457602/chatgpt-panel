@@ -81,6 +81,14 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		Status:         req.Status,
 		Name:           req.Name,
 	}
+	planType := ""
+	if account.AccessToken != "" {
+		planType = services.ExtractSubscriptionStatusFromToken(account.AccessToken)
+	}
+	if planType == "" && req.SubscriptionStatus != "" {
+		planType = services.NormalizeSubscriptionStatus(req.SubscriptionStatus)
+	}
+	account.SubscriptionStatus = planType
 
 	if err := h.accountService.Create(account); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -110,6 +118,14 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		return
 	}
 
+	tokenChanged := false
+	if req.AccessToken != "" && req.AccessToken != account.AccessToken {
+		tokenChanged = true
+	}
+	if req.RefreshToken != "" && req.RefreshToken != account.RefreshToken {
+		tokenChanged = true
+	}
+
 	account.Email = req.Email
 	account.Password = req.Password
 	account.AccessToken = req.AccessToken
@@ -119,6 +135,20 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	account.SessionCookies = req.SessionCookies
 	account.Status = req.Status
 	account.Name = req.Name
+	planType := ""
+	if account.AccessToken != "" {
+		planType = services.ExtractSubscriptionStatusFromToken(account.AccessToken)
+	}
+	if planType == "" && req.SubscriptionStatus != "" {
+		planType = services.NormalizeSubscriptionStatus(req.SubscriptionStatus)
+	}
+	if planType != "" {
+		account.SubscriptionStatus = planType
+	}
+	if tokenChanged {
+		account.CliproxySynced = false
+		account.CliproxySyncedAt = nil
+	}
 
 	if err := h.accountService.Update(account); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -221,6 +251,12 @@ func (h *AccountHandler) UpdateRefreshToken(c *gin.Context) {
 	}
 
 	if account, err := h.accountService.GetByID(uint(id)); err == nil {
+		if account.AccessToken != "" {
+			if plan := services.ExtractSubscriptionStatusFromToken(account.AccessToken); plan != "" && plan != account.SubscriptionStatus {
+				account.SubscriptionStatus = plan
+				_ = h.accountService.Update(account)
+			}
+		}
 		services.GetCliproxySyncService().Enqueue(account)
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Refresh token updated"})
@@ -322,6 +358,9 @@ func (h *AccountHandler) SyncCliproxy(c *gin.Context) {
 	var failures []string
 	for _, account := range accounts {
 		accountCopy := account
+		if !services.GetCliproxySyncService().Eligible(&accountCopy) {
+			continue
+		}
 		if err := services.GetCliproxySyncService().SyncAccount(c.Request.Context(), &accountCopy); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", account.Email, err))
 			continue
@@ -340,29 +379,31 @@ func (h *AccountHandler) SyncCliproxy(c *gin.Context) {
 }
 
 type importAccountPayload struct {
-	Email          string          `json:"email"`
-	Password       string          `json:"password"`
-	AccessToken    string          `json:"access_token"`
-	RefreshToken   string          `json:"refresh_token"`
-	CheckoutURL    string          `json:"checkout_url"`
-	AccountID      string          `json:"account_id"`
-	SessionCookies json.RawMessage `json:"session_cookies"`
-	Cookies        json.RawMessage `json:"cookies"`
-	Status         string          `json:"status"`
-	Name           string          `json:"name"`
-	CreatedAt      string          `json:"created_at"`
-	LastRefresh    string          `json:"last_refresh"`
-	Expired        string          `json:"expired"`
-	Type           string          `json:"type"`
-	Notes          string          `json:"notes"`
+	Email              string          `json:"email"`
+	Password           string          `json:"password"`
+	AccessToken        string          `json:"access_token"`
+	RefreshToken       string          `json:"refresh_token"`
+	CheckoutURL        string          `json:"checkout_url"`
+	AccountID          string          `json:"account_id"`
+	SessionCookies     json.RawMessage `json:"session_cookies"`
+	Cookies            json.RawMessage `json:"cookies"`
+	Status             string          `json:"status"`
+	Name               string          `json:"name"`
+	CreatedAt          string          `json:"created_at"`
+	LastRefresh        string          `json:"last_refresh"`
+	Expired            string          `json:"expired"`
+	Type               string          `json:"type"`
+	SubscriptionStatus string          `json:"subscription_status"`
+	Notes              string          `json:"notes"`
 }
 
 type importAccountMeta struct {
-	HasPassword     bool
-	HasStatus       bool
-	HasCookies      bool
-	HasNotes        bool
-	HasRegisteredAt bool
+	HasPassword           bool
+	HasStatus             bool
+	HasCookies            bool
+	HasNotes              bool
+	HasRegisteredAt       bool
+	HasSubscriptionStatus bool
 }
 
 func decodeImportPayloads(r io.Reader) ([]importAccountPayload, error) {
@@ -420,6 +461,21 @@ func normalizeImportPayload(payload importAccountPayload) (*models.Account, impo
 		Name:         strings.TrimSpace(payload.Name),
 	}
 
+	planType := ""
+	if account.AccessToken != "" {
+		planType = services.ExtractSubscriptionStatusFromToken(account.AccessToken)
+	}
+	if planType == "" {
+		planType = services.NormalizeSubscriptionStatus(payload.SubscriptionStatus)
+	}
+	if planType == "" {
+		planType = services.NormalizeSubscriptionStatus(payload.Type)
+	}
+	if planType != "" {
+		account.SubscriptionStatus = planType
+		meta.HasSubscriptionStatus = true
+	}
+
 	password := strings.TrimSpace(payload.Password)
 	if password != "" {
 		account.Password = password
@@ -445,7 +501,6 @@ func normalizeImportPayload(payload importAccountPayload) (*models.Account, impo
 	}
 
 	notes := strings.TrimSpace(payload.Notes)
-	planType := strings.TrimSpace(payload.Type)
 	if planType != "" {
 		typeNote := "plan=" + planType
 		if notes == "" {
@@ -499,6 +554,9 @@ func applyImportDefaults(account *models.Account, meta importAccountMeta) {
 			account.Status = "pending"
 		}
 	}
+	if account.SubscriptionStatus == "" {
+		account.SubscriptionStatus = "free"
+	}
 }
 
 func mergeImportedAccount(existing *models.Account, incoming *models.Account, meta importAccountMeta) *models.Account {
@@ -534,8 +592,23 @@ func mergeImportedAccount(existing *models.Account, incoming *models.Account, me
 	if meta.HasStatus {
 		merged.Status = incoming.Status
 	}
+	if meta.HasSubscriptionStatus {
+		merged.SubscriptionStatus = incoming.SubscriptionStatus
+	}
 	if meta.HasNotes {
 		merged.Notes = mergeImportNotes(existing.Notes, incoming.Notes)
+	}
+
+	tokenChanged := false
+	if incoming.AccessToken != "" && incoming.AccessToken != existing.AccessToken {
+		tokenChanged = true
+	}
+	if incoming.RefreshToken != "" && incoming.RefreshToken != existing.RefreshToken {
+		tokenChanged = true
+	}
+	if tokenChanged {
+		merged.CliproxySynced = false
+		merged.CliproxySyncedAt = nil
 	}
 
 	return &merged
