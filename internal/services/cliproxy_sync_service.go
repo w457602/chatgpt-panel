@@ -155,6 +155,8 @@ func (s *CliproxySyncService) buildPayload(account *models.Account) (map[string]
 	}
 	if account.AccessToken != "" {
 		payload["access_token"] = account.AccessToken
+		// CLIProxyAPI UI parses id_token claims; reuse access_token JWT as a fallback.
+		payload["id_token"] = account.AccessToken
 	}
 	if account.AccountID != "" {
 		payload["account_id"] = account.AccountID
