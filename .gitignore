@@ -27,3 +27,4 @@ __pycache__/
 chatgpt_accounts_api.json
 chatgpt_accounts_check_url.txt
 .tmp-cloudflared.yml
+codex-*.json

@@ -155,7 +155,8 @@
                                     <span x-show="!account.refresh_token" class="text-gray-300"><i class="fas fa-times"></i></span>
                                 </td>
                                 <td class="px-4 py-3">
-                                    <a x-show="account.checkout_url" :href="account.checkout_url" target="_blank" class="text-blue-500 hover:underline">绑卡</a>
+                                    <button x-show="account.checkout_url" @click="openExternal(account.checkout_url)" class="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600">绑卡</button>
+                                    <span x-show="!account.checkout_url" class="text-gray-300">-</span>
                                 </td>
                                 <td class="px-4 py-3 text-sm text-gray-500" x-text="formatDate(account.registered_at)"></td>
                                 <td class="px-4 py-3">
@@ -668,6 +669,14 @@
                     } catch (e) {
                         alert('刷新失败: ' + e.message);
                     }
+                },
+
+                openExternal(url) {
+                    const target = (url || '').trim();
+                    if (!target) {
+                        return;
+                    }
+                    window.open(target, '_blank', 'noopener,noreferrer');
                 },
 
                 copyText(text) {
