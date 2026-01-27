@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -144,6 +145,9 @@ func (s *CliproxySyncService) buildPayload(account *models.Account) (map[string]
 	if account.Email == "" {
 		return nil, errors.New("cliproxy payload missing email")
 	}
+	if account.AccountID == "" && account.AccessToken != "" {
+		account.AccountID = extractAccountIDFromAccessToken(account.AccessToken)
+	}
 	payload := map[string]interface{}{
 		"type":          "codex",
 		"email":         account.Email,
@@ -154,6 +158,8 @@ func (s *CliproxySyncService) buildPayload(account *models.Account) (map[string]
 	}
 	if account.AccountID != "" {
 		payload["account_id"] = account.AccountID
+	} else {
+		return nil, errors.New("cliproxy payload missing account_id")
 	}
 	if account.TokenExpired != nil {
 		payload["expired"] = account.TokenExpired.UTC().Format(time.RFC3339)
@@ -204,4 +210,76 @@ func sanitizeFileName(input string) string {
 		return "account"
 	}
 	return out
+}
+
+func extractAccountIDFromAccessToken(token string) string {
+	claims := parseJWTClaims(token)
+	if claims == nil {
+		return ""
+	}
+	if v, ok := claims["chatgpt_account_id"].(string); ok && v != "" {
+		return v
+	}
+	if v, ok := claims["account_id"].(string); ok && v != "" {
+		return v
+	}
+	if authClaim, ok := claims["https://api.openai.com/auth"]; ok {
+		if accountID := extractAccountIDFromAuthClaim(authClaim); accountID != "" {
+			return accountID
+		}
+	}
+	return ""
+}
+
+func extractAccountIDFromAuthClaim(value interface{}) string {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		return stringValue(v["chatgpt_account_id"])
+	case map[string]any:
+		return stringValue(v["chatgpt_account_id"])
+	case string:
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(v), &parsed); err == nil {
+			return stringValue(parsed["chatgpt_account_id"])
+		}
+	}
+	return ""
+}
+
+func stringValue(value interface{}) string {
+	if value == nil {
+		return ""
+	}
+	if s, ok := value.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
+}
+
+func parseJWTClaims(token string) map[string]interface{} {
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 {
+		return nil
+	}
+	payload, err := decodeJWTPart(parts[1])
+	if err != nil {
+		return nil
+	}
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil
+	}
+	return claims
+}
+
+func decodeJWTPart(part string) ([]byte, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(part)
+	if err == nil {
+		return decoded, nil
+	}
+	padding := (4 - len(part)%4) % 4
+	if padding > 0 {
+		part += strings.Repeat("=", padding)
+	}
+	return base64.URLEncoding.DecodeString(part)
 }
