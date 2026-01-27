@@ -39,7 +39,6 @@
             <div class="max-w-7xl mx-auto px-4 py-3 flex justify-between items-center">
                 <h1 class="text-xl font-bold text-gray-800">ChatGPT 账号管理面板</h1>
                 <div class="flex items-center gap-4">
-                    <button @click="openImportModal" class="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600">导入账号</button>
                     <span class="text-gray-600" x-text="currentUser?.username"></span>
                     <button @click="logout" class="text-red-500 hover:text-red-700">退出</button>
                 </div>
@@ -48,11 +47,11 @@
 
         <!-- 统计卡片 -->
         <div class="max-w-7xl mx-auto px-4 py-6">
-            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
-                <div class="bg-white rounded-lg shadow p-4">
-                    <div class="text-sm text-gray-500">总账号</div>
-                    <div class="text-2xl font-bold" x-text="stats.total || 0"></div>
-                </div>
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
+                    <div class="bg-white rounded-lg shadow p-4">
+                        <div class="text-sm text-gray-500">总账号</div>
+                        <div class="text-2xl font-bold" x-text="stats.total || 0"></div>
+                    </div>
                 <div class="bg-white rounded-lg shadow p-4">
                     <div class="text-sm text-gray-500">待处理</div>
                     <div class="text-2xl font-bold text-yellow-500" x-text="stats.pending || 0"></div>
@@ -69,10 +68,20 @@
                     <div class="text-sm text-gray-500">有RT</div>
                     <div class="text-2xl font-bold text-blue-500" x-text="stats.with_refresh_token || 0"></div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-4">
-                    <div class="text-sm text-gray-500">今日新增</div>
-                    <div class="text-2xl font-bold text-purple-500" x-text="stats.today_count || 0"></div>
+                    <div class="bg-white rounded-lg shadow p-4">
+                        <div class="text-sm text-gray-500">今日新增</div>
+                        <div class="text-2xl font-bold text-purple-500" x-text="stats.today_count || 0"></div>
+                    </div>
                 </div>
+
+            <!-- 快捷操作 -->
+            <div class="bg-white rounded-lg shadow p-4 mb-6 flex flex-wrap items-center gap-3">
+                <button @click="openImportModal" class="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600">导入账号</button>
+                <button @click="syncCliproxy" class="bg-indigo-500 text-white px-3 py-1 rounded hover:bg-indigo-600" :disabled="cliproxySyncing">
+                    <span x-show="!cliproxySyncing">同步到 CLIProxyAPI</span>
+                    <span x-show="cliproxySyncing"><i class="fas fa-spinner fa-spin"></i> 同步中...</span>
+                </button>
+                <span class="text-sm text-gray-500" x-show="cliproxySyncMessage" x-text="cliproxySyncMessage"></span>
             </div>
 
             <!-- 筛选栏 -->
@@ -319,6 +328,8 @@
                     success: false,
                     details: ''
                 },
+                cliproxySyncing: false,
+                cliproxySyncMessage: '',
                 showOAuthModal: false,
                 oauthData: {
                     accountId: null,
@@ -490,6 +501,27 @@
                         this.importData.message = '导入失败: ' + (e.message || '未知错误');
                     } finally {
                         this.importData.importing = false;
+                    }
+                },
+
+                async syncCliproxy() {
+                    if (!confirm('确定同步所有已获取 RT 的账号到 CLIProxyAPI?')) return;
+                    this.cliproxySyncing = true;
+                    this.cliproxySyncMessage = '';
+                    try {
+                        const res = await this.api('/api/v1/accounts/cliproxy-sync', { method: 'POST' });
+                        if (res?.error) {
+                            this.cliproxySyncMessage = '同步失败: ' + res.error;
+                            return;
+                        }
+                        const failed = typeof res?.failed === 'number' ? res.failed : 0;
+                        const success = typeof res?.success === 'number' ? res.success : 0;
+                        const total = typeof res?.total === 'number' ? res.total : success + failed;
+                        this.cliproxySyncMessage = `同步完成: 成功 ${success} / 总数 ${total} / 失败 ${failed}`;
+                    } catch (e) {
+                        this.cliproxySyncMessage = '同步失败: ' + e.message;
+                    } finally {
+                        this.cliproxySyncing = false;
                     }
                 },
 

@@ -1,0 +1,207 @@
+package services
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	"github.com/webauto/chatgpt-panel/internal/models"
+)
+
+const (
+	cliproxyBaseURLEnv      = "CLIPROXY_BASE_URL"
+	cliproxyKeyEnv          = "CLIPROXY_MANAGEMENT_KEY"
+	cliproxyPrefixEnv       = "CLIPROXY_AUTH_FILE_PREFIX"
+	cliproxyTimeoutEnv      = "CLIPROXY_TIMEOUT_SECONDS"
+	defaultCliproxyPrefix   = "codex"
+	defaultCliproxyTimeout  = 15 * time.Second
+	cliproxyAuthFilePattern = "%s-%s.json"
+)
+
+type CliproxySyncService struct {
+	baseURL       string
+	managementKey string
+	filePrefix    string
+	timeout       time.Duration
+	client        *http.Client
+	enabled       bool
+}
+
+var (
+	cliproxyOnce    sync.Once
+	cliproxyService *CliproxySyncService
+)
+
+func GetCliproxySyncService() *CliproxySyncService {
+	cliproxyOnce.Do(func() {
+		cliproxyService = NewCliproxySyncService()
+	})
+	return cliproxyService
+}
+
+func NewCliproxySyncService() *CliproxySyncService {
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv(cliproxyBaseURLEnv)), "/")
+	key := strings.TrimSpace(os.Getenv(cliproxyKeyEnv))
+	prefix := strings.TrimSpace(os.Getenv(cliproxyPrefixEnv))
+	if prefix == "" {
+		prefix = defaultCliproxyPrefix
+	}
+
+	timeout := defaultCliproxyTimeout
+	if raw := strings.TrimSpace(os.Getenv(cliproxyTimeoutEnv)); raw != "" {
+		if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+			timeout = time.Duration(seconds) * time.Second
+		}
+	}
+
+	return &CliproxySyncService{
+		baseURL:       baseURL,
+		managementKey: key,
+		filePrefix:    prefix,
+		timeout:       timeout,
+		client:        &http.Client{Timeout: timeout},
+		enabled:       baseURL != "" && key != "",
+	}
+}
+
+func (s *CliproxySyncService) Enabled() bool {
+	return s != nil && s.enabled
+}
+
+func (s *CliproxySyncService) Enqueue(account *models.Account) {
+	if s == nil || account == nil {
+		return
+	}
+	accountCopy := *account
+	go func() {
+		if err := s.SyncAccount(context.Background(), &accountCopy); err != nil {
+			log.Printf("cliproxy sync failed: %v", err)
+		}
+	}()
+}
+
+func (s *CliproxySyncService) SyncAccount(ctx context.Context, account *models.Account) error {
+	if s == nil || !s.enabled || account == nil {
+		return nil
+	}
+	if strings.TrimSpace(account.RefreshToken) == "" {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.timeout)
+		defer cancel()
+	}
+
+	payload, err := s.buildPayload(account)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("cliproxy payload marshal failed: %w", err)
+	}
+
+	reqURL := fmt.Sprintf("%s/v0/management/auth-files?name=%s", s.baseURL, url.QueryEscape(s.buildFileName(account)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("cliproxy request build failed: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.managementKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("cliproxy request failed: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("cliproxy import failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+func (s *CliproxySyncService) buildPayload(account *models.Account) (map[string]interface{}, error) {
+	if account.Email == "" {
+		return nil, errors.New("cliproxy payload missing email")
+	}
+	payload := map[string]interface{}{
+		"type":          "codex",
+		"email":         account.Email,
+		"refresh_token": account.RefreshToken,
+	}
+	if account.AccessToken != "" {
+		payload["access_token"] = account.AccessToken
+	}
+	if account.AccountID != "" {
+		payload["account_id"] = account.AccountID
+	}
+	if account.TokenExpired != nil {
+		payload["expired"] = account.TokenExpired.UTC().Format(time.RFC3339)
+	}
+
+	lastRefresh := account.UpdatedAt
+	if lastRefresh.IsZero() {
+		lastRefresh = time.Now()
+	}
+	payload["last_refresh"] = lastRefresh.UTC().Format(time.RFC3339)
+
+	return payload, nil
+}
+
+func (s *CliproxySyncService) buildFileName(account *models.Account) string {
+	base := strings.TrimSpace(account.AccountID)
+	if base == "" {
+		base = strings.TrimSpace(account.Email)
+	}
+	if base == "" {
+		base = fmt.Sprintf("account-%d", account.ID)
+	}
+	base = sanitizeFileName(base)
+	return fmt.Sprintf(cliproxyAuthFilePattern, s.filePrefix, base)
+}
+
+func sanitizeFileName(input string) string {
+	if input == "" {
+		return "account"
+	}
+	var b strings.Builder
+	for _, r := range input {
+		if r > unicode.MaxASCII {
+			b.WriteByte('_')
+			continue
+		}
+		if (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	out := strings.Trim(b.String(), "._-")
+	if out == "" {
+		return "account"
+	}
+	return out
+}

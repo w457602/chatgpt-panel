@@ -78,6 +78,7 @@ func main() {
 			auth.PATCH("/accounts/:id/status", accountHandler.UpdateStatus)
 			auth.POST("/accounts/batch-status", accountHandler.BatchUpdateStatus)
 			auth.PATCH("/accounts/:id/refresh-token", accountHandler.UpdateRefreshToken)
+			auth.POST("/accounts/cliproxy-sync", accountHandler.SyncCliproxy)
 
 			// 账号测试
 			auth.POST("/accounts/:id/test", accountHandler.TestAccount)

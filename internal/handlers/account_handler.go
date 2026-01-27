@@ -87,6 +87,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		return
 	}
 
+	services.GetCliproxySyncService().Enqueue(account)
 	c.JSON(http.StatusCreated, account)
 }
 
@@ -124,6 +125,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		return
 	}
 
+	services.GetCliproxySyncService().Enqueue(account)
 	c.JSON(http.StatusOK, account)
 }
 
@@ -218,6 +220,9 @@ func (h *AccountHandler) UpdateRefreshToken(c *gin.Context) {
 		return
 	}
 
+	if account, err := h.accountService.GetByID(uint(id)); err == nil {
+		services.GetCliproxySyncService().Enqueue(account)
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "Refresh token updated"})
 }
 
@@ -271,6 +276,7 @@ func (h *AccountHandler) Import(c *gin.Context) {
 				continue
 			}
 			lastAccount = merged
+			services.GetCliproxySyncService().Enqueue(merged)
 		} else {
 			applyImportDefaults(account, meta)
 			if err := h.accountService.Create(account); err != nil {
@@ -278,6 +284,7 @@ func (h *AccountHandler) Import(c *gin.Context) {
 				continue
 			}
 			lastAccount = account
+			services.GetCliproxySyncService().Enqueue(account)
 		}
 
 		imported++
@@ -297,6 +304,39 @@ func (h *AccountHandler) Import(c *gin.Context) {
 		response["errors"] = errMessages
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *AccountHandler) SyncCliproxy(c *gin.Context) {
+	var accounts []models.Account
+	if err := models.GetDB().Where("refresh_token IS NOT NULL AND refresh_token != ''").Find(&accounts).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if !services.GetCliproxySyncService().Enabled() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cliproxy sync is not configured"})
+		return
+	}
+
+	var success int
+	var failures []string
+	for _, account := range accounts {
+		accountCopy := account
+		if err := services.GetCliproxySyncService().SyncAccount(c.Request.Context(), &accountCopy); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", account.Email, err))
+			continue
+		}
+		success++
+	}
+
+	resp := gin.H{
+		"message":  "Cliproxy sync completed",
+		"total":    len(accounts),
+		"success":  success,
+		"failed":   len(failures),
+		"failures": failures,
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 type importAccountPayload struct {
@@ -372,12 +412,12 @@ func normalizeImportPayload(payload importAccountPayload) (*models.Account, impo
 	}
 
 	account := &models.Account{
-		Email:       email,
-		AccessToken: strings.TrimSpace(payload.AccessToken),
+		Email:        email,
+		AccessToken:  strings.TrimSpace(payload.AccessToken),
 		RefreshToken: strings.TrimSpace(payload.RefreshToken),
-		CheckoutURL: strings.TrimSpace(payload.CheckoutURL),
-		AccountID:   strings.TrimSpace(payload.AccountID),
-		Name:        strings.TrimSpace(payload.Name),
+		CheckoutURL:  strings.TrimSpace(payload.CheckoutURL),
+		AccountID:    strings.TrimSpace(payload.AccountID),
+		Name:         strings.TrimSpace(payload.Name),
 	}
 
 	password := strings.TrimSpace(payload.Password)
@@ -642,7 +682,7 @@ func (h *AccountHandler) RefreshAccountToken(c *gin.Context) {
 	h.accountService.Update(account)
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Token 刷新成功",
+		"message":      "Token 刷新成功",
 		"access_token": result.AccessToken[:50] + "...",
 	})
 }

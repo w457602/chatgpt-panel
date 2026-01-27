@@ -265,16 +265,26 @@ func (s *CodexOAuthService) updateAccount(accountID uint, token *codexTokenRespo
 
 	if token.RefreshToken != "" {
 		updates["refresh_token"] = token.RefreshToken
+		account.RefreshToken = token.RefreshToken
 	}
 	if tokenAccountID != "" {
 		updates["account_id"] = tokenAccountID
+		account.AccountID = tokenAccountID
 	}
 	if token.ExpiresIn > 0 {
 		expiresAt := time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
 		updates["token_expired"] = &expiresAt
+		account.TokenExpired = &expiresAt
 	}
 
-	return models.GetDB().Model(&models.Account{}).Where("id = ?", accountID).Updates(updates).Error
+	if err := models.GetDB().Model(&models.Account{}).Where("id = ?", accountID).Updates(updates).Error; err != nil {
+		return err
+	}
+
+	account.AccessToken = token.AccessToken
+	account.Status = "active"
+	GetCliproxySyncService().Enqueue(&account)
+	return nil
 }
 
 func (s *CodexOAuthService) getSession(state string) (codexSession, bool) {
