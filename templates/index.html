@@ -266,6 +266,16 @@
                 <button @click="showOAuthModal=false" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
             </div>
             <div class="p-4 space-y-4">
+                <div class="space-y-2">
+                    <label class="block font-medium text-gray-700">当前邮箱</label>
+                    <div class="flex gap-2">
+                        <input type="text" readonly :value="oauthData.email || ''" class="flex-1 border rounded px-3 py-2 bg-gray-50 text-sm" />
+                        <button @click="copyText(oauthData.email || '')" class="px-3 py-2 bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50" title="复制邮箱" :disabled="!oauthData.email">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                    </div>
+                </div>
+
                 <!-- 步骤 1: 授权链接 -->
                 <div class="space-y-2">
                     <label class="block font-medium text-gray-700">步骤 1: 打开授权链接</label>
@@ -294,6 +304,7 @@
 
                 <!-- 提交按钮 -->
                 <div class="flex justify-end gap-2">
+                    <a :href="`https://mail.chatgpt.org.uk/${oauthData.email || ''}`" target="_blank" class="px-4 py-2 border rounded hover:bg-gray-50" :class="!oauthData.email ? 'pointer-events-none opacity-50' : ''">查看邮箱</a>
                     <button @click="showOAuthModal=false" class="px-4 py-2 border rounded hover:bg-gray-50">取消</button>
                     <button @click="submitOAuthCallback" class="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50" :disabled="oauthData.submitting || !oauthData.callbackUrl">
                         <span x-show="!oauthData.submitting">提交回调</span>
@@ -333,6 +344,7 @@
                 showOAuthModal: false,
                 oauthData: {
                     accountId: null,
+                    email: '',
                     authUrl: '',
                     state: '',
                     callbackUrl: '',
@@ -529,6 +541,7 @@
                     // 重置 OAuth 数据
                     this.oauthData = {
                         accountId: account.id,
+                        email: account.email || '',
                         authUrl: '',
                         state: '',
                         callbackUrl: '',
