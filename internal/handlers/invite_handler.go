@@ -51,11 +51,21 @@ func (h *InviteHandler) JoinByInviteCode(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprint(r)})
 		}
 	}()
+	c.Header("X-Invite-Handler", "1")
 
 	var req joinRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+		// fallback: form/query
+		req.Code = strings.TrimSpace(c.PostForm("code"))
+		req.Email = strings.TrimSpace(c.PostForm("email"))
+		if req.Code == "" || req.Email == "" {
+			req.Code = strings.TrimSpace(c.Query("code"))
+			req.Email = strings.TrimSpace(c.Query("email"))
+		}
+		if req.Code == "" || req.Email == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload", "detail": err.Error()})
+			return
+		}
 	}
 
 	code := strings.ToUpper(strings.TrimSpace(req.Code))

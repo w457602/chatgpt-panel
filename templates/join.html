@@ -44,10 +44,11 @@
             statusEl.textContent = '';
 
             try {
+                const payload = new URLSearchParams({ code, email });
                 const res = await fetch('/api/v1/invite/join', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify({ code, email })
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+                    body: payload.toString()
                 });
                 const text = await res.text();
                 let data = {};
