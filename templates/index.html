@@ -284,23 +284,7 @@
                 <button @click="showInviteModal=false" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
             </div>
             <div class="p-4 space-y-6">
-                <div class="grid grid-cols-1 md:grid-cols-6 gap-3">
-                    <div class="md:col-span-2 space-y-2">
-                        <input type="text" x-model="inviteAccountSearch" placeholder="搜索账号邮箱..." class="border rounded px-3 py-2 w-full">
-                        <div class="flex items-center gap-2">
-                            <select x-model="inviteForm.account_id" class="border rounded px-3 py-2 w-full">
-                                <option value="">请选择账号</option>
-                                <template x-for="account in filteredInviteAccounts()" :key="account.id">
-                                    <option :value="account.id" x-text="`${account.email} (ID:${account.id})`"></option>
-                                </template>
-                            </select>
-                            <button @click="loadInviteAccounts" class="px-3 py-2 border rounded hover:bg-gray-50">刷新</button>
-                        </div>
-                        <p class="text-xs text-gray-500" x-show="inviteAccountsMeta.loaded">
-                            <span x-text="`已加载 ${inviteAccounts.length} 个账号`"></span>
-                            <span x-show="inviteAccountsMeta.total > inviteAccounts.length" x-text="`（仅显示前 ${inviteAccounts.length} 个）`"></span>
-                        </p>
-                    </div>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
                     <input type="text" x-model="inviteForm.code" placeholder="邀请码(可选)" class="border rounded px-3 py-2">
                     <input type="number" min="0" x-model="inviteForm.max_uses" placeholder="可用次数(0不限)" class="border rounded px-3 py-2">
                     <input type="datetime-local" x-model="inviteForm.expires_at" class="border rounded px-3 py-2">
@@ -311,6 +295,7 @@
                 </div>
                 <div class="flex items-center gap-2 text-sm text-gray-500">
                     <span>过期时间为本地时间，提交时自动转为 UTC。</span>
+                    <span>邀请码首次使用时自动绑定一个可用 Team。</span>
                     <label class="flex items-center gap-2">
                         <input type="checkbox" x-model="inviteForm.disabled">
                         <span>禁用</span>
@@ -345,7 +330,7 @@
                                     <td class="px-3 py-2">
                                         <button class="text-blue-600 hover:text-blue-800" @click="copyText(code.code)" x-text="code.code"></button>
                                     </td>
-                                    <td class="px-3 py-2" x-text="code.account_id"></td>
+                                    <td class="px-3 py-2" x-text="code.account_id || '-'"></td>
                                     <td class="px-3 py-2">
                                         <span x-text="code.max_uses ? `${code.used_count}/${code.max_uses}` : `${code.used_count}/不限`"></span>
                                     </td>
@@ -468,10 +453,7 @@
                 inviteSaving: false,
                 inviteMessage: '',
                 inviteSuccess: false,
-                inviteForm: { account_id: '', code: '', max_uses: '', expires_at: '', disabled: false },
-                inviteAccounts: [],
-                inviteAccountsMeta: { loaded: false, total: 0 },
-                inviteAccountSearch: '',
+                inviteForm: { code: '', max_uses: '', expires_at: '', disabled: false },
 
                 async init() {
                     if (this.token) {
@@ -605,9 +587,8 @@
                     this.showInviteModal = true;
                     this.inviteMessage = '';
                     this.inviteSuccess = false;
-                    this.inviteForm = { account_id: '', code: '', max_uses: '', expires_at: '', disabled: false };
+                    this.inviteForm = { code: '', max_uses: '', expires_at: '', disabled: false };
                     this.loadInviteCodes();
-                    this.loadInviteAccounts();
                 },
 
                 async loadInviteCodes() {
@@ -615,27 +596,8 @@
                     this.inviteCodes = res?.data || [];
                 },
 
-                async loadInviteAccounts() {
-                    const params = new URLSearchParams({ page: 1, page_size: 100, sort_by: 'updated_at', sort_dir: 'desc' });
-                    const res = await this.api('/api/v1/accounts?' + params);
-                    const list = res?.data || [];
-                    this.inviteAccounts = list.filter(acc => acc.access_token || acc.refresh_token);
-                    this.inviteAccountsMeta = { loaded: true, total: res?.total || this.inviteAccounts.length };
-                },
-
-                filteredInviteAccounts() {
-                    const keyword = (this.inviteAccountSearch || '').trim().toLowerCase();
-                    if (!keyword) return this.inviteAccounts;
-                    return this.inviteAccounts.filter(acc => (acc.email || '').toLowerCase().includes(keyword));
-                },
-
                 async createInviteCode() {
-                    if (!this.inviteForm.account_id) {
-                        this.inviteMessage = '请选择账号';
-                        this.inviteSuccess = false;
-                        return;
-                    }
-                    const payload = { account_id: Number(this.inviteForm.account_id) };
+                    const payload = {};
                     if (this.inviteForm.code) {
                         payload.code = this.inviteForm.code.trim();
                     }

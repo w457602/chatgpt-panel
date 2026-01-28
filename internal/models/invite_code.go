@@ -6,7 +6,7 @@ import "time"
 type InviteCode struct {
 	ID         uint       `gorm:"primaryKey" json:"id"`
 	Code       string     `gorm:"uniqueIndex;size:64;not null" json:"code"`
-	AccountID  uint       `gorm:"index;not null" json:"account_id"`
+	AccountID  *uint      `gorm:"index" json:"account_id,omitempty"`
 	MaxUses    int        `gorm:"default:0" json:"max_uses"`    // 0 表示不限次数
 	UsedCount  int        `gorm:"default:0" json:"used_count"`
 	Disabled   bool       `gorm:"default:false" json:"disabled"`

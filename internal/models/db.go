@@ -31,6 +31,10 @@ func InitDB() error {
 	if err := DB.AutoMigrate(&Account{}, &User{}, &InviteCode{}); err != nil {
 		return err
 	}
+	// 允许 invite_codes.account_id 为空（兼容已存在的表结构）
+	if err := DB.Exec("ALTER TABLE invite_codes ALTER COLUMN account_id DROP NOT NULL").Error; err != nil {
+		log.Printf("ℹ️ invite_codes.account_id 可能已允许为空或表不存在: %v", err)
+	}
 
 	// 创建默认管理员账号
 	createDefaultAdmin()

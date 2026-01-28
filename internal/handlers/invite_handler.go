@@ -42,6 +42,7 @@ type inviteAttemptResult struct {
 	RetryWithNext bool
 	InviteID      string
 	ConsumeCode   bool
+	UsedAccountID uint
 }
 
 // JoinByInviteCode 用户提交邀请码加入 Team
@@ -103,8 +104,8 @@ func (h *InviteHandler) JoinByInviteCode(c *gin.Context) {
 	}
 
 	var candidates []models.Account
-	if inviteCode.AccountID > 0 {
-		account, err := h.accountService.GetByID(inviteCode.AccountID)
+	if inviteCode.AccountID != nil && *inviteCode.AccountID > 0 {
+		account, err := h.accountService.GetByID(*inviteCode.AccountID)
 		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "邀请码对应账号不存在"})
 			return
@@ -160,10 +161,14 @@ func (h *InviteHandler) JoinByInviteCode(c *gin.Context) {
 		if inviteCode.MaxUses > 0 {
 			updateQuery = updateQuery.Where("used_count < max_uses")
 		}
-		resultUpdate := updateQuery.Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"used_count":  gorm.Expr("used_count + 1"),
 			"last_used_at": &now,
-		})
+		}
+		if inviteCode.AccountID == nil && successAttempt.UsedAccountID > 0 {
+			updates["account_id"] = successAttempt.UsedAccountID
+		}
+		resultUpdate := updateQuery.Updates(updates)
 		if inviteCode.MaxUses > 0 && resultUpdate.RowsAffected == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "邀请码已用完"})
 			return
@@ -247,7 +252,7 @@ func (h *InviteHandler) attemptInvite(c *gin.Context, account *models.Account, e
 			nonOwnerCount++
 		}
 		if strings.EqualFold(strings.TrimSpace(m.Email), email) {
-			return &inviteAttemptResult{Success: true, Message: "该邮箱已在团队中"}, nil
+			return &inviteAttemptResult{Success: true, Message: "该邮箱已在团队中", ConsumeCode: true, UsedAccountID: account.ID}, nil
 		}
 	}
 
@@ -273,7 +278,7 @@ func (h *InviteHandler) attemptInvite(c *gin.Context, account *models.Account, e
 	if pendingResult.Success {
 		for _, inv := range pendingResult.Invites {
 			if strings.EqualFold(strings.TrimSpace(inv.EmailAddress), email) {
-				return &inviteAttemptResult{Success: true, Message: "该邮箱已发送邀请，请查收邮件"}, nil
+				return &inviteAttemptResult{Success: true, Message: "该邮箱已发送邀请，请查收邮件", ConsumeCode: true, UsedAccountID: account.ID}, nil
 			}
 		}
 	}
@@ -310,7 +315,7 @@ func (h *InviteHandler) attemptInvite(c *gin.Context, account *models.Account, e
 		if membersResult != nil && membersResult.Success {
 			for _, m := range membersResult.Members {
 				if strings.EqualFold(strings.TrimSpace(m.Email), email) {
-					return &inviteAttemptResult{Success: true, Message: "邀请已发送，请查收邮件"}, nil
+					return &inviteAttemptResult{Success: true, Message: "邀请已发送，请查收邮件", ConsumeCode: true, UsedAccountID: account.ID}, nil
 				}
 			}
 		}
@@ -318,7 +323,7 @@ func (h *InviteHandler) attemptInvite(c *gin.Context, account *models.Account, e
 		if pendingResult != nil && pendingResult.Success {
 			for _, inv := range pendingResult.Invites {
 				if strings.EqualFold(strings.TrimSpace(inv.EmailAddress), email) {
-					return &inviteAttemptResult{Success: true, Message: "邀请已发送，请查收邮件"}, nil
+					return &inviteAttemptResult{Success: true, Message: "邀请已发送，请查收邮件", ConsumeCode: true, UsedAccountID: account.ID}, nil
 				}
 			}
 		}
@@ -336,12 +341,13 @@ func (h *InviteHandler) attemptInvite(c *gin.Context, account *models.Account, e
 		StatusCode: result.StatusCode,
 		InviteID:   result.InviteID,
 		ConsumeCode: true,
+		UsedAccountID: account.ID,
 	}, nil
 }
 
 type createInviteCodeRequest struct {
 	Code      string `json:"code"`
-	AccountID uint   `json:"account_id" binding:"required"`
+	AccountID *uint  `json:"account_id"`
 	MaxUses   int    `json:"max_uses"`
 	ExpiresAt string `json:"expires_at"`
 	Disabled  bool   `json:"disabled"`
@@ -361,9 +367,11 @@ func (h *InviteHandler) CreateInviteCode(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.accountService.GetByID(req.AccountID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "账号不存在"})
-		return
+	if req.AccountID != nil && *req.AccountID > 0 {
+		if _, err := h.accountService.GetByID(*req.AccountID); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "账号不存在"})
+			return
+		}
 	}
 
 	code := strings.ToUpper(strings.TrimSpace(req.Code))
