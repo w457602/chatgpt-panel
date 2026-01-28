@@ -54,6 +54,22 @@ func NewInviteService() *InviteService {
 	}
 }
 
+func applyCommonHeaders(req *http.Request, accessToken, accountID, referer string) {
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("chatgpt-account-id", accountID)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+	req.Header.Set("Origin", "https://chatgpt.com")
+	req.Header.Set("Referer", referer)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("sec-ch-ua", "\"Chromium\";v=\"120\", \"Not.A/Brand\";v=\"24\"")
+	req.Header.Set("sec-ch-ua-mobile", "?0")
+	req.Header.Set("sec-ch-ua-platform", "\"Windows\"")
+}
+
 func (s *InviteService) SendInvite(ctx context.Context, accessToken, accountID, email string) (*InviteResult, error) {
 	if accessToken == "" || accountID == "" || email == "" {
 		return nil, fmt.Errorf("missing access_token/account_id/email")
@@ -71,11 +87,8 @@ func (s *InviteService) SendInvite(ctx context.Context, accessToken, accountID, 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("chatgpt-account-id", accountID)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	applyCommonHeaders(req, accessToken, accountID, "https://chatgpt.com/admin")
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -124,10 +137,7 @@ func (s *InviteService) GetMembers(ctx context.Context, accessToken, accountID s
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("chatgpt-account-id", accountID)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	applyCommonHeaders(req, accessToken, accountID, "https://chatgpt.com/admin")
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -177,10 +187,7 @@ func (s *InviteService) GetPendingInvites(ctx context.Context, accessToken, acco
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("chatgpt-account-id", accountID)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	applyCommonHeaders(req, accessToken, accountID, "https://chatgpt.com/admin")
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {

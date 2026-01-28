@@ -238,52 +238,62 @@ func (h *InviteHandler) attemptInvite(c *gin.Context, account *models.Account, e
 			}
 		}
 	}
+	skipPrecheck := false
 	if !membersResult.Success {
-		msg := membersResult.Message
-		if msg == "" {
-			msg = "无法获取成员列表"
+		if membersResult.StatusCode == http.StatusForbidden {
+			// 上游 403（可能是风控/Cloudflare），跳过成员检查继续尝试邀请
+			skipPrecheck = true
+		} else {
+			msg := membersResult.Message
+			if msg == "" {
+				msg = "无法获取成员列表"
+			}
+			return &inviteAttemptResult{Success: false, Message: msg, StatusCode: membersResult.StatusCode, RetryWithNext: true}, nil
 		}
-		return &inviteAttemptResult{Success: false, Message: msg, StatusCode: membersResult.StatusCode, RetryWithNext: true}, nil
 	}
 
 	nonOwnerCount := 0
-	for _, m := range membersResult.Members {
-		if strings.ToLower(strings.TrimSpace(m.Role)) != "account-owner" {
-			nonOwnerCount++
-		}
-		if strings.EqualFold(strings.TrimSpace(m.Email), email) {
-			return &inviteAttemptResult{Success: true, Message: "该邮箱已在团队中", ConsumeCode: true, UsedAccountID: account.ID}, nil
-		}
-	}
-
-	pendingResult, err := h.inviteService.GetPendingInvites(c.Request.Context(), accessToken, accountID)
-	if err != nil {
-		return &inviteAttemptResult{Success: false, Message: "获取邀请列表失败", RetryWithNext: true}, nil
-	}
-	if pendingResult.StatusCode == http.StatusUnauthorized && strings.TrimSpace(account.RefreshToken) != "" {
-		refreshed, err := h.accountTestService.RefreshAccessToken(c.Request.Context(), account.RefreshToken)
-		if err == nil && refreshed.AccessToken != "" {
-			account.AccessToken = refreshed.AccessToken
-			if refreshed.RefreshToken != "" {
-				account.RefreshToken = refreshed.RefreshToken
+	if !skipPrecheck {
+		for _, m := range membersResult.Members {
+			if strings.ToLower(strings.TrimSpace(m.Role)) != "account-owner" {
+				nonOwnerCount++
 			}
-			_ = h.accountService.Update(account)
-			accessToken = refreshed.AccessToken
-			pendingResult, err = h.inviteService.GetPendingInvites(c.Request.Context(), accessToken, accountID)
-			if err != nil {
-				return &inviteAttemptResult{Success: false, Message: "获取邀请列表失败", RetryWithNext: true}, nil
-			}
-		}
-	}
-	if pendingResult.Success {
-		for _, inv := range pendingResult.Invites {
-			if strings.EqualFold(strings.TrimSpace(inv.EmailAddress), email) {
-				return &inviteAttemptResult{Success: true, Message: "该邮箱已发送邀请，请查收邮件", ConsumeCode: true, UsedAccountID: account.ID}, nil
+			if strings.EqualFold(strings.TrimSpace(m.Email), email) {
+				return &inviteAttemptResult{Success: true, Message: "该邮箱已在团队中", ConsumeCode: true, UsedAccountID: account.ID}, nil
 			}
 		}
 	}
 
-	if nonOwnerCount >= 4 {
+	if !skipPrecheck {
+		pendingResult, err := h.inviteService.GetPendingInvites(c.Request.Context(), accessToken, accountID)
+		if err != nil {
+			return &inviteAttemptResult{Success: false, Message: "获取邀请列表失败", RetryWithNext: true}, nil
+		}
+		if pendingResult.StatusCode == http.StatusUnauthorized && strings.TrimSpace(account.RefreshToken) != "" {
+			refreshed, err := h.accountTestService.RefreshAccessToken(c.Request.Context(), account.RefreshToken)
+			if err == nil && refreshed.AccessToken != "" {
+				account.AccessToken = refreshed.AccessToken
+				if refreshed.RefreshToken != "" {
+					account.RefreshToken = refreshed.RefreshToken
+				}
+				_ = h.accountService.Update(account)
+				accessToken = refreshed.AccessToken
+				pendingResult, err = h.inviteService.GetPendingInvites(c.Request.Context(), accessToken, accountID)
+				if err != nil {
+					return &inviteAttemptResult{Success: false, Message: "获取邀请列表失败", RetryWithNext: true}, nil
+				}
+			}
+		}
+		if pendingResult.Success {
+			for _, inv := range pendingResult.Invites {
+				if strings.EqualFold(strings.TrimSpace(inv.EmailAddress), email) {
+					return &inviteAttemptResult{Success: true, Message: "该邮箱已发送邀请，请查收邮件", ConsumeCode: true, UsedAccountID: account.ID}, nil
+				}
+			}
+		}
+	}
+
+	if !skipPrecheck && nonOwnerCount >= 4 {
 		return &inviteAttemptResult{
 			Success:       false,
 			Message:       "Team 成员已满(4人)",
