@@ -523,7 +523,16 @@
                     options.headers = { ...options.headers, 'Authorization': `Bearer ${this.token}` };
                     const res = await fetch(url, options);
                     if (res.status === 401) { this.logout(); return null; }
-                    return res.json();
+                    const text = await res.text();
+                    if (!text) {
+                        return res.ok ? {} : { error: `HTTP ${res.status}` };
+                    }
+                    try {
+                        return JSON.parse(text);
+                    } catch (e) {
+                        const snippet = text.length > 300 ? text.slice(0, 300) + '...' : text;
+                        return { error: snippet || `HTTP ${res.status}` };
+                    }
                 },
 
                 async loadCurrentUser() {

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -331,6 +332,12 @@ type createInviteCodeRequest struct {
 
 // CreateInviteCode 创建邀请码（需登录）
 func (h *InviteHandler) CreateInviteCode(c *gin.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprint(r)})
+		}
+	}()
+
 	var req createInviteCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
