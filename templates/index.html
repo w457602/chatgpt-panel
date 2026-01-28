@@ -77,6 +77,8 @@
             <!-- 快捷操作 -->
             <div class="bg-white rounded-lg shadow p-4 mb-6 flex flex-wrap items-center gap-3">
                 <button @click="openImportModal" class="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600">导入账号</button>
+                <button @click="openInviteModal" class="bg-sky-500 text-white px-3 py-1 rounded hover:bg-sky-600">邀请码管理</button>
+                <a href="/join" target="_blank" class="bg-gray-200 text-gray-700 px-3 py-1 rounded hover:bg-gray-300">自动加入页</a>
                 <button @click="batchTestAllAccounts" class="bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600" :disabled="batchTestingAll || batchTestTaskId">
                     <span x-show="!batchTestingAll">一键检测全部账号</span>
                     <span x-show="batchTestingAll"><i class="fas fa-spinner fa-spin"></i> 启动中...</span>
@@ -274,6 +276,83 @@
         </div>
     </div>
 
+    <!-- 邀请码管理弹窗 -->
+    <div x-show="showInviteModal" x-cloak class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click.self="showInviteModal=false">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[80vh] overflow-auto">
+            <div class="p-4 border-b flex justify-between items-center">
+                <h3 class="text-lg font-bold">邀请码管理</h3>
+                <button @click="showInviteModal=false" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+            </div>
+            <div class="p-4 space-y-6">
+                <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
+                    <input type="number" min="1" x-model="inviteForm.account_id" placeholder="账号ID(必填)" class="border rounded px-3 py-2">
+                    <input type="text" x-model="inviteForm.code" placeholder="邀请码(可选)" class="border rounded px-3 py-2">
+                    <input type="number" min="0" x-model="inviteForm.max_uses" placeholder="可用次数(0不限)" class="border rounded px-3 py-2">
+                    <input type="datetime-local" x-model="inviteForm.expires_at" class="border rounded px-3 py-2">
+                    <button @click="createInviteCode" class="bg-sky-500 text-white px-3 py-2 rounded hover:bg-sky-600" :disabled="inviteSaving">
+                        <span x-show="!inviteSaving">创建邀请码</span>
+                        <span x-show="inviteSaving"><i class="fas fa-spinner fa-spin"></i> 创建中...</span>
+                    </button>
+                </div>
+                <div class="flex items-center gap-2 text-sm text-gray-500">
+                    <span>过期时间为本地时间，提交时自动转为 UTC。</span>
+                    <label class="flex items-center gap-2">
+                        <input type="checkbox" x-model="inviteForm.disabled">
+                        <span>禁用</span>
+                    </label>
+                </div>
+
+                <div x-show="inviteMessage" :class="inviteSuccess ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'" class="p-3 rounded text-sm">
+                    <span x-text="inviteMessage"></span>
+                </div>
+
+                <div class="flex justify-between items-center">
+                    <h4 class="font-semibold">邀请码列表</h4>
+                    <button @click="loadInviteCodes" class="text-sm text-blue-600 hover:text-blue-800">刷新</button>
+                </div>
+
+                <div class="border rounded overflow-hidden">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-3 py-2 text-left">邀请码</th>
+                                <th class="px-3 py-2 text-left">账号ID</th>
+                                <th class="px-3 py-2 text-left">使用</th>
+                                <th class="px-3 py-2 text-left">状态</th>
+                                <th class="px-3 py-2 text-left">过期时间</th>
+                                <th class="px-3 py-2 text-left">最近使用</th>
+                                <th class="px-3 py-2 text-left">创建时间</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="code in inviteCodes" :key="code.id">
+                                <tr class="border-t hover:bg-gray-50">
+                                    <td class="px-3 py-2">
+                                        <button class="text-blue-600 hover:text-blue-800" @click="copyText(code.code)" x-text="code.code"></button>
+                                    </td>
+                                    <td class="px-3 py-2" x-text="code.account_id"></td>
+                                    <td class="px-3 py-2">
+                                        <span x-text="code.max_uses ? `${code.used_count}/${code.max_uses}` : `${code.used_count}/不限`"></span>
+                                    </td>
+                                    <td class="px-3 py-2">
+                                        <span x-show="!code.disabled" class="text-green-600">启用</span>
+                                        <span x-show="code.disabled" class="text-gray-500">禁用</span>
+                                    </td>
+                                    <td class="px-3 py-2" x-text="formatDate(code.expires_at)"></td>
+                                    <td class="px-3 py-2" x-text="formatDate(code.last_used_at)"></td>
+                                    <td class="px-3 py-2" x-text="formatDate(code.created_at)"></td>
+                                </tr>
+                            </template>
+                            <tr x-show="inviteCodes.length === 0">
+                                <td colspan="7" class="px-3 py-6 text-center text-gray-500">暂无邀请码</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- OAuth 授权模态框 -->
     <div x-show="showOAuthModal" x-cloak class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click.self="showOAuthModal=false">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-xl">
@@ -369,6 +448,12 @@
                     message: '',
                     success: false
                 },
+                showInviteModal: false,
+                inviteCodes: [],
+                inviteSaving: false,
+                inviteMessage: '',
+                inviteSuccess: false,
+                inviteForm: { account_id: '', code: '', max_uses: '', expires_at: '', disabled: false },
 
                 async init() {
                     if (this.token) {
@@ -487,6 +572,63 @@
                     this.importData = { file: null, importing: false, message: '', success: false, details: '' };
                     this.showImportModal = true;
                     if (this.$refs.importFile) { this.$refs.importFile.value = ''; }
+                },
+
+                openInviteModal() {
+                    this.showInviteModal = true;
+                    this.inviteMessage = '';
+                    this.inviteSuccess = false;
+                    this.inviteForm = { account_id: '', code: '', max_uses: '', expires_at: '', disabled: false };
+                    this.loadInviteCodes();
+                },
+
+                async loadInviteCodes() {
+                    const res = await this.api('/api/v1/invite-codes');
+                    this.inviteCodes = res?.data || [];
+                },
+
+                async createInviteCode() {
+                    if (!this.inviteForm.account_id) {
+                        this.inviteMessage = '请填写账号ID';
+                        this.inviteSuccess = false;
+                        return;
+                    }
+                    const payload = { account_id: Number(this.inviteForm.account_id) };
+                    if (this.inviteForm.code) {
+                        payload.code = this.inviteForm.code.trim();
+                    }
+                    if (this.inviteForm.max_uses !== '') {
+                        payload.max_uses = Number(this.inviteForm.max_uses || 0);
+                    }
+                    if (this.inviteForm.expires_at) {
+                        payload.expires_at = this.toRFC3339(this.inviteForm.expires_at);
+                    }
+                    payload.disabled = !!this.inviteForm.disabled;
+
+                    this.inviteSaving = true;
+                    this.inviteMessage = '';
+                    try {
+                        const res = await this.api('/api/v1/invite-codes', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!res) return;
+                        if (res.error) {
+                            this.inviteMessage = res.error || '创建失败';
+                            this.inviteSuccess = false;
+                            return;
+                        }
+                        this.inviteMessage = `创建成功：${res.code || payload.code || ''}`;
+                        this.inviteSuccess = true;
+                        this.inviteForm.code = '';
+                        this.inviteForm.max_uses = '';
+                        this.inviteForm.expires_at = '';
+                        this.inviteForm.disabled = false;
+                        await this.loadInviteCodes();
+                    } finally {
+                        this.inviteSaving = false;
+                    }
                 },
 
                 async importAccounts() {
@@ -756,6 +898,13 @@
                 formatDate(date) {
                     if (!date) return '-';
                     return new Date(date).toLocaleString('zh-CN');
+                },
+
+                toRFC3339(value) {
+                    if (!value) return '';
+                    const date = new Date(value);
+                    if (Number.isNaN(date.getTime())) return value;
+                    return date.toISOString();
                 }
             }
         }

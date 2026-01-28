@@ -28,7 +28,7 @@ func InitDB() error {
 	}
 
 	// 自动迁移
-	if err := DB.AutoMigrate(&Account{}, &User{}); err != nil {
+	if err := DB.AutoMigrate(&Account{}, &User{}, &InviteCode{}); err != nil {
 		return err
 	}
 
@@ -58,4 +58,3 @@ func createDefaultAdmin() {
 func GetDB() *gorm.DB {
 	return DB
 }
-

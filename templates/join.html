@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatGPT Team 自动加入</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center">
+    <div class="w-full max-w-md bg-white rounded-lg shadow p-6">
+        <h1 class="text-2xl font-bold text-center mb-6">ChatGPT Team 自动加入</h1>
+        <form id="join-form" class="space-y-4">
+            <div>
+                <label class="block text-sm text-gray-600 mb-1">邀请码</label>
+                <input id="invite-code" type="text" class="w-full border rounded px-3 py-2" placeholder="请输入邀请码" required>
+            </div>
+            <div>
+                <label class="block text-sm text-gray-600 mb-1">邮箱</label>
+                <input id="email" type="email" class="w-full border rounded px-3 py-2" placeholder="请输入邮箱" required>
+            </div>
+            <button id="submit-btn" type="submit" class="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600">自动加入</button>
+        </form>
+        <p id="status" class="text-sm mt-4 text-center text-gray-600"></p>
+    </div>
+
+    <script>
+        const form = document.getElementById('join-form');
+        const statusEl = document.getElementById('status');
+        const submitBtn = document.getElementById('submit-btn');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const code = document.getElementById('invite-code').value.trim();
+            const email = document.getElementById('email').value.trim();
+
+            if (!code || !email) {
+                statusEl.textContent = '请输入邀请码和邮箱';
+                statusEl.className = 'text-sm mt-4 text-center text-red-500';
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = '提交中...';
+            statusEl.textContent = '';
+
+            try {
+                const res = await fetch('/api/v1/invite/join', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code, email })
+                });
+                const data = await res.json().catch(() => ({}));
+
+                if (res.ok) {
+                    statusEl.textContent = data.message || '邀请已发送，请查收邮件';
+                    statusEl.className = 'text-sm mt-4 text-center text-green-600';
+                } else {
+                    statusEl.textContent = data.error || '提交失败，请稍后再试';
+                    statusEl.className = 'text-sm mt-4 text-center text-red-500';
+                }
+            } catch (err) {
+                statusEl.textContent = '提交失败，请稍后再试';
+                statusEl.className = 'text-sm mt-4 text-center text-red-500';
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '自动加入';
+            }
+        });
+    </script>
+</body>
+</html>

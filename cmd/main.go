@@ -39,12 +39,17 @@ func main() {
 	r.GET("/", func(c *gin.Context) {
 		c.HTML(200, "index.html", nil)
 	})
+	// 自动加入页面
+	r.GET("/join", func(c *gin.Context) {
+		c.HTML(200, "join.html", nil)
+	})
 
 	// 初始化处理器
 	authHandler := handlers.NewAuthHandler()
 	accountHandler := handlers.NewAccountHandler()
 	oauthHandler := handlers.NewOAuthHandler()
 	extensionHandler := handlers.NewExtensionHandler()
+	inviteHandler := handlers.NewInviteHandler()
 
 	// 启动 Codex OAuth 回调服务
 	if err := services.GetCodexOAuthService().EnsureCallbackServer(); err != nil {
@@ -59,6 +64,8 @@ func main() {
 
 		// 账号导入（API Key认证）
 		api.POST("/accounts/import", accountHandler.Import)
+		// 自动加入（无需登录）
+		api.POST("/invite/join", inviteHandler.JoinByInviteCode)
 
 		// 扩展接口（用于浏览器插件）
 		extension := api.Group("/extension")
@@ -96,6 +103,10 @@ func main() {
 			auth.GET("/accounts/batch-test/:task_id", accountHandler.GetBatchTestResult)
 			auth.POST("/accounts/:id/refresh", accountHandler.RefreshAccountToken)
 			auth.POST("/accounts/:id/refresh-subscription", accountHandler.RefreshSubscriptionStatus)
+
+			// 邀请码管理
+			auth.GET("/invite-codes", inviteHandler.ListInviteCodes)
+			auth.POST("/invite-codes", inviteHandler.CreateInviteCode)
 
 			// Codex OAuth (PKCE)
 			auth.POST("/oauth/codex/start", oauthHandler.StartCodex)
