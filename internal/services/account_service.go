@@ -241,9 +241,17 @@ func (s *AccountService) GetStats() (*models.AccountStats, error) {
 	}
 
 	s.db.Model(&models.Account{}).Count(&stats.Total)
-	s.db.Model(&models.Account{}).Where("status = ?", "pending").Count(&stats.Pending)
+	boundStatuses := []string{"team", "chatgptteamplan"}
+	boundQuery := s.db.Model(&models.Account{}).
+		Where("status = ? OR LOWER(subscription_status) IN ?", "bound", boundStatuses)
+	boundQuery.Count(&stats.Bound)
+
+	pendingQuery := s.db.Model(&models.Account{}).
+		Where("checkout_url IS NOT NULL AND checkout_url != ''").
+		Where("status NOT IN ?", []string{"banned", "failed", "expired", "rate_limited"}).
+		Where("NOT (status = ? OR LOWER(subscription_status) IN ?)", "bound", boundStatuses)
+	pendingQuery.Count(&stats.Pending)
 	s.db.Model(&models.Account{}).Where("status = ?", "active").Count(&stats.Active)
-	s.db.Model(&models.Account{}).Where("status = ?", "bound").Count(&stats.Bound)
 	s.db.Model(&models.Account{}).Where("status = ?", "failed").Count(&stats.Failed)
 	s.db.Model(&models.Account{}).Where("status = ?", "expired").Count(&stats.Expired)
 	s.db.Model(&models.Account{}).Where("status = ?", "banned").Count(&stats.Banned)
