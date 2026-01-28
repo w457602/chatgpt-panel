@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -395,11 +396,10 @@ func generateInviteCode(length int) string {
 	if length < 4 {
 		length = 4
 	}
-	seed := time.Now().UnixNano()
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	code := make([]byte, length)
 	for i := 0; i < length; i++ {
-		seed = seed*1664525 + 1013904223
-		code[i] = charset[int(seed)%len(charset)]
+		code[i] = charset[rng.Intn(len(charset))]
 	}
 	return string(code)
 }
