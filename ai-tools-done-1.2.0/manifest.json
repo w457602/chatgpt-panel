@@ -1,0 +1,71 @@
+{
+  "manifest_version": 3,
+  "name": "AI Tools Done",
+  "version": "1.2.0",
+  "author": "cubezhao",
+  "description": "支持Cursor, AugmentCode, ChatGPT, 通用Stripe 自动填充卡号及地址",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "cookies",
+    "storage",
+    "webRequest",
+    "webNavigation",
+    "tabs",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "一键填充"
+  },
+  "commands": {
+    "bind-card": {
+      "description": "一键绑卡"
+    },
+    "fill-only": {
+      "description": "仅填充"
+    }
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.augmentcode.com/*",
+        "https://cursor.com/*",
+        "https://checkout.stripe.com/*",
+        "https://pay.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://js.stripe.com/*"
+      ],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "dist/injected.bundle.js"
+      ],
+      "matches": [
+        "https://*.augmentcode.com/*",
+        "https://cursor.com/*",
+        "https://checkout.stripe.com/*",
+        "https://pay.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://js.stripe.com/*"
+      ]
+    }
+  ]
+}

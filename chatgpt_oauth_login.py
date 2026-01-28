@@ -54,6 +54,118 @@ class Config:
     # 线上项目导入配置
     PANEL_API_BASE = "https://chatgptpanel.zeabur.app"
     PANEL_IMPORT_ENDPOINT = "/api/v1/accounts/import"
+    PANEL_USERNAME = "admin"
+    PANEL_PASSWORD = "admin123"
+
+
+# ============================================================================
+# Panel API 客户端
+# ============================================================================
+class PanelAPIClient:
+    """线上 Panel API 客户端"""
+
+    def __init__(self):
+        self.base_url = Config.PANEL_API_BASE
+        self.token: Optional[str] = None
+
+    def login(self) -> bool:
+        """登录获取 JWT Token"""
+        try:
+            resp = std_requests.post(
+                f"{self.base_url}/api/v1/auth/login",
+                json={"username": Config.PANEL_USERNAME, "password": Config.PANEL_PASSWORD},
+                timeout=30
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                self.token = data.get("token")
+                print(f"✅ Panel API 登录成功")
+                return True
+            else:
+                print(f"❌ Panel API 登录失败: {resp.status_code} - {resp.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"❌ Panel API 登录异常: {e}")
+            return False
+
+    def _get_headers(self) -> Dict:
+        """获取带认证的请求头"""
+        return {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+
+    def fetch_accounts(self, page: int = 1, page_size: int = 100, status: str = "") -> Optional[Dict]:
+        """获取账号列表"""
+        if not self.token:
+            if not self.login():
+                return None
+
+        try:
+            params = {"page": page, "page_size": page_size}
+            if status:
+                params["status"] = status
+
+            resp = std_requests.get(
+                f"{self.base_url}/api/v1/accounts",
+                params=params,
+                headers=self._get_headers(),
+                timeout=30
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            else:
+                print(f"❌ 获取账号列表失败: {resp.status_code} - {resp.text[:200]}")
+                return None
+        except Exception as e:
+            print(f"❌ 获取账号列表异常: {e}")
+            return None
+
+    def update_refresh_token(self, account_id: int, refresh_token: str) -> bool:
+        """更新账号的 Refresh Token"""
+        if not self.token:
+            if not self.login():
+                return False
+
+        try:
+            resp = std_requests.patch(
+                f"{self.base_url}/api/v1/accounts/{account_id}/refresh-token",
+                json={"refresh_token": refresh_token},
+                headers=self._get_headers(),
+                timeout=30
+            )
+            if resp.status_code == 200:
+                print(f"✅ Refresh Token 更新成功 (账号ID: {account_id})")
+                return True
+            else:
+                print(f"❌ 更新 Refresh Token 失败: {resp.status_code} - {resp.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"❌ 更新 Refresh Token 异常: {e}")
+            return False
+
+    def update_account(self, account_id: int, data: Dict) -> bool:
+        """更新账号信息"""
+        if not self.token:
+            if not self.login():
+                return False
+
+        try:
+            resp = std_requests.put(
+                f"{self.base_url}/api/v1/accounts/{account_id}",
+                json=data,
+                headers=self._get_headers(),
+                timeout=30
+            )
+            if resp.status_code == 200:
+                print(f"✅ 账号信息更新成功 (账号ID: {account_id})")
+                return True
+            else:
+                print(f"❌ 更新账号信息失败: {resp.status_code} - {resp.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"❌ 更新账号信息异常: {e}")
+            return False
 
 
 # ============================================================================
@@ -821,6 +933,300 @@ class ChatGPTOAuthClient:
 # ============================================================================
 # 主函数
 # ============================================================================
+def parse_selection(selection: str, max_count: int) -> list:
+    """解析用户输入的选择，支持多种格式
+
+    支持格式:
+    - 单个: "5"
+    - 范围: "3-20"
+    - 多个: "1,3,5,7"
+    - 混合: "1,3-5,8,10-12"
+    """
+    indices = set()
+    parts = selection.replace(" ", "").split(",")
+
+    for part in parts:
+        if "-" in part:
+            # 范围格式: "3-20"
+            try:
+                start, end = part.split("-", 1)
+                start_idx = int(start)
+                end_idx = int(end)
+                if start_idx > end_idx:
+                    start_idx, end_idx = end_idx, start_idx
+                for i in range(start_idx, end_idx + 1):
+                    if 1 <= i <= max_count:
+                        indices.add(i)
+            except ValueError:
+                continue
+        else:
+            # 单个数字
+            try:
+                idx = int(part)
+                if 1 <= idx <= max_count:
+                    indices.add(idx)
+            except ValueError:
+                continue
+
+    return sorted(list(indices))
+
+
+def display_accounts_menu(accounts: list, batch_mode: bool = False) -> Optional[list]:
+    """显示账号列表菜单并让用户选择
+
+    Args:
+        accounts: 账号列表
+        batch_mode: 是否批量模式，批量模式返回账号列表
+
+    Returns:
+        batch_mode=False: 返回单个账号 dict 或 None
+        batch_mode=True: 返回账号列表 list 或 None
+    """
+    if not accounts:
+        print("❌ 没有可用的账号")
+        return None
+
+    print("\n" + "=" * 70)
+    print("📋 账号列表")
+    print("=" * 70)
+    print(f"{'序号':<6}{'邮箱':<40}{'状态':<12}{'RT':<8}")
+    print("-" * 70)
+
+    for i, acc in enumerate(accounts, 1):
+        email = acc.get("email", "N/A")[:38]
+        status = acc.get("status", "N/A")
+        has_rt = "✓" if acc.get("refresh_token") else "✗"
+        print(f"{i:<6}{email:<40}{status:<12}{has_rt:<8}")
+
+    print("-" * 70)
+    print(f"共 {len(accounts)} 个账号")
+    print("=" * 70)
+
+    if batch_mode:
+        print("\n💡 支持多选格式:")
+        print("   单个: 5")
+        print("   范围: 3-20")
+        print("   多个: 1,3,5,7")
+        print("   混合: 1,3-5,8,10-12")
+
+    while True:
+        prompt = "\n请输入账号序号 (输入 q 退出): " if not batch_mode else "\n请输入账号序号 (支持批量选择, q 退出): "
+        choice = input(prompt).strip()
+
+        if choice.lower() == 'q':
+            return None
+
+        if batch_mode:
+            indices = parse_selection(choice, len(accounts))
+            if indices:
+                selected = [accounts[i - 1] for i in indices]
+                print(f"\n✅ 已选择 {len(selected)} 个账号")
+                return selected
+            else:
+                print(f"❌ 无效的输入，请输入 1-{len(accounts)} 之间的数字")
+        else:
+            try:
+                idx = int(choice)
+                if 1 <= idx <= len(accounts):
+                    return [accounts[idx - 1]]
+                else:
+                    print(f"❌ 请输入 1-{len(accounts)} 之间的数字")
+            except ValueError:
+                print("❌ 请输入有效的数字")
+
+
+def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
+    """处理单个账号的 OAuth 登录流程
+
+    Returns:
+        bool: 是否成功获取并更新 RT
+    """
+    email = account.get("email")
+    password = account.get("password")
+    account_id = account.get("id")
+
+    if not email or not password:
+        print(f"❌ [{email}] 账号信息不完整 (缺少邮箱或密码)")
+        return False
+
+    print(f"\n{'='*60}")
+    print(f"🔄 正在处理: {email}")
+    print(f"{'='*60}")
+
+    client = ChatGPTOAuthClient()
+
+    # 步骤1: 生成授权URL
+    auth_url = client.step1_generate_auth_url()
+    print(f"   🔗 授权URL已生成")
+
+    # 步骤2: 初始化会话
+    if not client.step2_init_auth_session(auth_url):
+        print(f"   ❌ 初始化会话失败")
+        return False
+
+    # 步骤3: 提交邮箱
+    success, result = client.step3_submit_email(email)
+    if not success:
+        if result == "not_registered":
+            print(f"   ❌ 该邮箱未注册")
+        else:
+            print(f"   ❌ 邮箱提交失败")
+        return False
+
+    # 步骤4: 提交密码
+    success, result = client.step4_submit_password(email, password)
+    if not success:
+        print(f"   ❌ 密码验证失败")
+        return False
+
+    continue_url = result
+
+    # 步骤5a: 如果需要验证码
+    if result == "otp_required":
+        print(f"   ⚠️ [{email}] 需要邮箱验证码")
+        code = input(f"   🔢 请输入 {email} 的验证码: ").strip()
+        if not code:
+            print(f"   ❌ 验证码不能为空，跳过此账号")
+            return False
+        success, result = client.step5_submit_otp(code)
+        if not success:
+            print(f"   ❌ 验证码验证失败")
+            return False
+        continue_url = result
+
+    # 步骤5b: 选择workspace
+    if result == "workspace_select" or continue_url == "workspace_select":
+        success, continue_url = client.step5_select_workspace()
+        if not success:
+            print(f"   ❌ Workspace选择失败")
+            return False
+
+    # 步骤6: 处理consent页面
+    callback_url = None
+    if continue_url and continue_url.startswith("http"):
+        callback_url = client.step6_handle_consent(continue_url)
+
+    # 如果自动处理失败
+    if not callback_url:
+        print(f"   ⚠️ 无法自动获取回调URL")
+        print(f"   授权URL: {auth_url[:80]}...")
+        callback_url = input(f"   📋 请粘贴 {email} 的回调URL (直接回车跳过): ").strip()
+        if not callback_url:
+            print(f"   ⏭️ 跳过此账号")
+            return False
+
+    # 步骤7: 换取token
+    tokens = client.process_callback_url(callback_url)
+
+    if tokens:
+        refresh_token = tokens.get("refresh_token")
+        access_token = tokens.get("access_token")
+
+        if refresh_token:
+            print(f"   🔐 RT: {refresh_token[:40]}...")
+
+            # 更新线上 Panel 的 RT
+            if panel_client.update_refresh_token(account_id, refresh_token):
+                print(f"   ✅ 线上 RT 更新成功!")
+
+            # 同时更新 access_token
+            if access_token:
+                account_info = extract_account_info(access_token)
+                update_data = {
+                    "email": email,
+                    "password": password,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "account_id": account_info.get("account_id", ""),
+                    "status": "active",
+                }
+                panel_client.update_account(account_id, update_data)
+
+            # 保存到本地文件
+            result_data = {
+                "email": email,
+                "account_id": account_id,
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "created_at": datetime.now().isoformat(),
+            }
+            with open("oauth_tokens.json", 'a', encoding='utf-8') as f:
+                f.write(json.dumps(result_data, ensure_ascii=False) + '\n')
+
+            return True
+        else:
+            print(f"   ⚠️ 未获取到 Refresh Token")
+            return False
+    else:
+        print(f"   ❌ OAuth授权失败")
+        return False
+
+
+def auto_login_from_panel():
+    """从线上 Panel 获取账号列表并自动登录获取 RT (支持批量)"""
+    print("=" * 60)
+    print("ChatGPT OAuth 自动登录 (从 Panel 获取账号)")
+    print("=" * 60)
+
+    # 1. 连接 Panel API
+    print("\n� 正在连接 Panel API...")
+    panel_client = PanelAPIClient()
+    if not panel_client.login():
+        print("❌ 无法连接 Panel API")
+        return
+
+    # 2. 获取账号列表
+    print("\n📥 正在获取账号列表...")
+    result = panel_client.fetch_accounts(page=1, page_size=100)
+    if not result:
+        print("❌ 获取账号列表失败")
+        return
+
+    accounts = result.get("accounts", result.get("data", []))
+    if not accounts:
+        print("❌ 没有找到账号")
+        return
+
+    print(f"✅ 获取到 {len(accounts)} 个账号")
+
+    # 3. 显示账号列表并选择 (支持批量)
+    selected_accounts = display_accounts_menu(accounts, batch_mode=True)
+    if not selected_accounts:
+        print("已取消")
+        return
+
+    # 4. 批量处理选中的账号
+    total = len(selected_accounts)
+    success_count = 0
+    failed_count = 0
+
+    print(f"\n{'='*60}")
+    print(f"📋 开始处理 {total} 个账号")
+    print(f"{'='*60}")
+
+    for i, account in enumerate(selected_accounts, 1):
+        print(f"\n[{i}/{total}] 处理中...")
+
+        if login_single_account(panel_client, account):
+            success_count += 1
+        else:
+            failed_count += 1
+
+        # 批量处理时增加延迟，避免请求过快
+        if total > 1 and i < total:
+            import time
+            time.sleep(2)
+
+    # 5. 输出统计结果
+    print(f"\n{'='*60}")
+    print(f"📊 批量处理完成")
+    print(f"{'='*60}")
+    print(f"   ✅ 成功: {success_count}")
+    print(f"   ❌ 失败: {failed_count}")
+    print(f"   📝 总计: {total}")
+    print(f"{'='*60}")
+
+
 def interactive_login():
     """交互式OAuth登录"""
     print("=" * 60)
@@ -1000,8 +1406,9 @@ def main():
     print("1. 交互式OAuth登录 (完整流程)")
     print("2. 仅处理回调URL (已有回调链接)")
     print("3. 生成授权URL (仅生成链接)")
+    print("4. 从 Panel 获取账号自动登录 (推荐)")
 
-    choice = input("\n请输入选项 (1/2/3): ").strip()
+    choice = input("\n请输入选项 (1/2/3/4): ").strip()
 
     if choice == "1":
         interactive_login()
@@ -1015,6 +1422,8 @@ def main():
         print(client.code_verifier)
         print(f"\n📋 State:")
         print(client.state)
+    elif choice == "4":
+        auto_login_from_panel()
     else:
         print("❌ 无效的选项")
 
