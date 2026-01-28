@@ -167,6 +167,29 @@ class PanelAPIClient:
             print(f"❌ 更新账号信息异常: {e}")
             return False
 
+    def update_status(self, account_id: int, status: str) -> bool:
+        """仅更新账号状态"""
+        if not self.token:
+            if not self.login():
+                return False
+
+        try:
+            resp = std_requests.patch(
+                f"{self.base_url}/api/v1/accounts/{account_id}/status",
+                json={"status": status},
+                headers=self._get_headers(),
+                timeout=30
+            )
+            if resp.status_code == 200:
+                print(f"✅ 账号状态已更新为 {status} (账号ID: {account_id})")
+                return True
+            else:
+                print(f"❌ 更新账号状态失败: {resp.status_code} - {resp.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"❌ 更新账号状态异常: {e}")
+            return False
+
 
 # ============================================================================
 # 账号导入工具
@@ -1035,6 +1058,12 @@ def display_accounts_menu(accounts: list, batch_mode: bool = False) -> Optional[
                 print("❌ 请输入有效的数字")
 
 
+def is_bound_account(account: Dict) -> bool:
+    """判断账号是否为已绑卡状态"""
+    status = str(account.get("status", "")).lower()
+    return status == "bound"
+
+
 def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
     """处理单个账号的 OAuth 登录流程
 
@@ -1126,8 +1155,10 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
             print(f"   🔐 RT: {refresh_token[:40]}...")
 
             # 更新线上 Panel 的 RT
+            panel_updated = False
             if panel_client.update_refresh_token(account_id, refresh_token):
                 print(f"   ✅ 线上 RT 更新成功!")
+                panel_updated = True
 
             # 同时更新 access_token
             if access_token:
@@ -1140,7 +1171,12 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
                     "account_id": account_info.get("account_id", ""),
                     "status": "active",
                 }
-                panel_client.update_account(account_id, update_data)
+                if panel_client.update_account(account_id, update_data):
+                    panel_updated = True
+
+            # 获取RT成功后，清空绑卡状态
+            if panel_updated:
+                panel_client.update_status(account_id, "active")
 
             # 保存到本地文件
             result_data = {
@@ -1163,9 +1199,9 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
 
 
 def auto_login_from_panel():
-    """从线上 Panel 获取账号列表并自动登录获取 RT (支持批量)"""
+    """从线上 Panel 获取已绑卡账号并自动登录获取 RT"""
     print("=" * 60)
-    print("ChatGPT OAuth 自动登录 (从 Panel 获取账号)")
+    print("ChatGPT OAuth 自动登录 (仅从 Panel 获取已绑卡账号)")
     print("=" * 60)
 
     # 1. 连接 Panel API
@@ -1189,11 +1225,12 @@ def auto_login_from_panel():
 
     print(f"✅ 获取到 {len(accounts)} 个账号")
 
-    # 3. 显示账号列表并选择 (支持批量)
-    selected_accounts = display_accounts_menu(accounts, batch_mode=True)
+    # 3. 仅保留已绑卡账号
+    selected_accounts = [acc for acc in accounts if is_bound_account(acc)]
     if not selected_accounts:
-        print("已取消")
+        print("❌ 未找到已绑卡账号")
         return
+    print(f"✅ 已筛选到 {len(selected_accounts)} 个已绑卡账号，开始自动处理...")
 
     # 4. 批量处理选中的账号
     total = len(selected_accounts)
@@ -1401,31 +1438,8 @@ def process_callback_only():
 
 
 def main():
-    """主函数"""
-    print("\n请选择模式:")
-    print("1. 交互式OAuth登录 (完整流程)")
-    print("2. 仅处理回调URL (已有回调链接)")
-    print("3. 生成授权URL (仅生成链接)")
-    print("4. 从 Panel 获取账号自动登录 (推荐)")
-
-    choice = input("\n请输入选项 (1/2/3/4): ").strip()
-
-    if choice == "1":
-        interactive_login()
-    elif choice == "2":
-        process_callback_only()
-    elif choice == "3":
-        client = ChatGPTOAuthClient()
-        auth_url = client.step1_generate_auth_url()
-        print(f"\n🔗 授权URL:\n{auth_url}")
-        print(f"\n🔑 Code Verifier (保存好，换取token时需要):")
-        print(client.code_verifier)
-        print(f"\n📋 State:")
-        print(client.state)
-    elif choice == "4":
-        auto_login_from_panel()
-    else:
-        print("❌ 无效的选项")
+    """主函数：仅保留从 Panel 获取账号自动登录"""
+    auto_login_from_panel()
 
 
 if __name__ == "__main__":

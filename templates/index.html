@@ -47,7 +47,7 @@
 
         <!-- 统计卡片 -->
         <div class="max-w-7xl mx-auto px-4 py-6">
-                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4 mb-6">
+                <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 mb-6">
                     <div class="bg-white rounded-lg shadow p-4">
                         <div class="text-sm text-gray-500">总账号</div>
                         <div class="text-2xl font-bold" x-text="stats.total || 0"></div>
@@ -55,10 +55,6 @@
                 <div class="bg-white rounded-lg shadow p-4">
                     <div class="text-sm text-gray-500">待绑卡</div>
                     <div class="text-2xl font-bold text-yellow-500" x-text="stats.pending || 0"></div>
-                </div>
-                <div class="bg-white rounded-lg shadow p-4">
-                    <div class="text-sm text-gray-500">绑卡成功</div>
-                    <div class="text-2xl font-bold text-emerald-600" x-text="stats.bound || 0"></div>
                 </div>
                 <div class="bg-white rounded-lg shadow p-4">
                     <div class="text-sm text-gray-500">已激活</div>
