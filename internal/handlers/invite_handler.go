@@ -46,6 +46,12 @@ type inviteAttemptResult struct {
 
 // JoinByInviteCode 用户提交邀请码加入 Team
 func (h *InviteHandler) JoinByInviteCode(c *gin.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprint(r)})
+		}
+	}()
+
 	var req joinRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
