@@ -721,7 +721,6 @@ func (h *AccountHandler) BatchTestAccounts(c *gin.Context) {
 func (h *AccountHandler) BatchTestAllAccounts(c *gin.Context) {
 	var ids []uint
 	if err := models.GetDB().Model(&models.Account{}).
-		Where("status NOT IN ?", []string{"bound", "banned"}).
 		Where("access_token IS NOT NULL AND access_token != ''").
 		Pluck("id", &ids).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
