@@ -31,8 +31,8 @@ func NewInviteHandler() *InviteHandler {
 }
 
 type joinRequest struct {
-    Code  string `json:"code" binding:"required"`
-    Email string `json:"email" binding:"required"`
+	Code  string `json:"code" form:"code"`
+	Email string `json:"email" form:"email"`
 }
 
 type inviteAttemptResult struct {
@@ -54,7 +54,7 @@ func (h *InviteHandler) JoinByInviteCode(c *gin.Context) {
 	c.Header("X-Invite-Handler", "1")
 
 	var req joinRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBind(&req); err != nil {
 		// fallback: form/query
 		req.Code = strings.TrimSpace(c.PostForm("code"))
 		req.Email = strings.TrimSpace(c.PostForm("email"))
