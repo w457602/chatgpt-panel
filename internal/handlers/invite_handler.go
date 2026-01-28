@@ -329,7 +329,7 @@ func (h *InviteHandler) attemptInvite(c *gin.Context, account *models.Account, e
 				}
 			}
 		}
-		pendingResult, _ = h.inviteService.GetPendingInvites(c.Request.Context(), accessToken, accountID)
+		pendingResult, _ := h.inviteService.GetPendingInvites(c.Request.Context(), accessToken, accountID)
 		if pendingResult != nil && pendingResult.Success {
 			for _, inv := range pendingResult.Invites {
 				if strings.EqualFold(strings.TrimSpace(inv.EmailAddress), email) {
