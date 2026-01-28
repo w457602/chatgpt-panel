@@ -21,7 +21,7 @@ type Account struct {
 	CliproxySynced     bool            `gorm:"default:false" json:"cliproxy_synced"`
 	CliproxySyncedAt   *time.Time      `json:"cliproxy_synced_at"`
 	SessionCookies     json.RawMessage `gorm:"type:jsonb" json:"session_cookies"`
-	Status             string          `gorm:"index;size:50;default:pending" json:"status"` // pending, active, failed, expired
+	Status             string          `gorm:"index;size:50;default:pending" json:"status"` // pending, active, bound, failed, expired
 	Name               string          `gorm:"size:100" json:"name"`
 	Notes              string          `gorm:"type:text" json:"notes"`
 	RegisteredAt       time.Time       `gorm:"index" json:"registered_at"`

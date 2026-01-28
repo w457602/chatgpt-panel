@@ -8,16 +8,17 @@ import (
 )
 
 type Config struct {
-	DatabaseURL string
-	DBHost     string
-	DBPort     string
-	DBUser     string
-	DBPassword string
-	DBName     string
-	DBSSLMode  string
-	ServerPort string
-	GinMode    string
-	JWTSecret  string
+	DatabaseURL    string
+	DBHost         string
+	DBPort         string
+	DBUser         string
+	DBPassword     string
+	DBName         string
+	DBSSLMode      string
+	ServerPort     string
+	GinMode        string
+	JWTSecret      string
+	ExtensionToken string
 }
 
 var AppConfig *Config
@@ -31,16 +32,17 @@ func Load() error {
 	}
 
 	AppConfig = &Config{
-		DatabaseURL: getEnv("DATABASE_URL", ""),
-		DBHost:     getEnv("DB_HOST", "localhost"),
-		DBPort:     getEnv("DB_PORT", "5432"),
-		DBUser:     getEnv("DB_USER", "postgres"),
-		DBPassword: getEnv("DB_PASSWORD", "postgres"),
-		DBName:     getEnv("DB_NAME", "chatgpt_panel"),
-		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
-		ServerPort: serverPort,
-		GinMode:    getEnv("GIN_MODE", "debug"),
-		JWTSecret:  getEnv("JWT_SECRET", "chatgpt-panel-secret-key-2024"),
+		DatabaseURL:    getEnv("DATABASE_URL", ""),
+		DBHost:         getEnv("DB_HOST", "localhost"),
+		DBPort:         getEnv("DB_PORT", "5432"),
+		DBUser:         getEnv("DB_USER", "postgres"),
+		DBPassword:     getEnv("DB_PASSWORD", "postgres"),
+		DBName:         getEnv("DB_NAME", "chatgpt_panel"),
+		DBSSLMode:      getEnv("DB_SSLMODE", "disable"),
+		ServerPort:     serverPort,
+		GinMode:        getEnv("GIN_MODE", "debug"),
+		JWTSecret:      getEnv("JWT_SECRET", "chatgpt-panel-secret-key-2024"),
+		ExtensionToken: getEnv("EXTENSION_TOKEN", ""),
 	}
 
 	return nil

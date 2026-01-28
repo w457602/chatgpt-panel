@@ -85,7 +85,7 @@ func CORSMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-Extension-Token, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 
 		if c.Request.Method == "OPTIONS" {
@@ -97,3 +97,22 @@ func CORSMiddleware() gin.HandlerFunc {
 	}
 }
 
+// ExtensionAuthMiddleware validates the extension token when configured.
+// If EXTENSION_TOKEN is empty, requests are allowed to pass through.
+func ExtensionAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		secret := strings.TrimSpace(config.AppConfig.ExtensionToken)
+		if secret == "" {
+			c.Next()
+			return
+		}
+
+		token := strings.TrimSpace(c.GetHeader("X-Extension-Token"))
+		if token == "" || token != secret {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid extension token"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}

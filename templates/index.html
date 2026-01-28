@@ -92,6 +92,7 @@
                         <option value="">全部状态</option>
                         <option value="pending">待处理</option>
                         <option value="active">已激活</option>
+                        <option value="bound">绑卡成功</option>
                         <option value="failed">失败</option>
                         <option value="expired">已过期</option>
                     </select>
@@ -147,8 +148,9 @@
                                     <span x-show="!account.refresh_token" class="text-gray-300"><i class="fas fa-times"></i></span>
                                 </td>
                                 <td class="px-4 py-3">
-                                    <button x-show="account.checkout_url" @click="openExternal(account.checkout_url)" class="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600">绑卡</button>
-                                    <span x-show="!account.checkout_url" class="text-gray-300">-</span>
+                                    <span x-show="account.status === 'bound'" class="px-2 py-1 text-xs rounded bg-green-100 text-green-700">绑卡成功</span>
+                                    <button x-show="account.status !== 'bound' && account.checkout_url" @click="openExternal(account.checkout_url)" class="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600">绑卡</button>
+                                    <span x-show="account.status !== 'bound' && !account.checkout_url" class="text-gray-300">-</span>
                                 </td>
                                 <td class="px-4 py-3">
                                     <span x-show="account.cliproxy_synced" class="text-green-500"><i class="fas fa-check"></i></span>
@@ -704,7 +706,7 @@
                 },
 
                 statusText(status) {
-                    const map = { pending: '待处理', active: '已激活', failed: '失败', expired: '已过期', banned: '被封禁', rate_limited: '限流' };
+                    const map = { pending: '待处理', active: '已激活', bound: '绑卡成功', failed: '失败', expired: '已过期', banned: '被封禁', rate_limited: '限流' };
                     return map[status] || status;
                 },
 

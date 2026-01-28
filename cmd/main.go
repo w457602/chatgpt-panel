@@ -44,6 +44,7 @@ func main() {
 	authHandler := handlers.NewAuthHandler()
 	accountHandler := handlers.NewAccountHandler()
 	oauthHandler := handlers.NewOAuthHandler()
+	extensionHandler := handlers.NewExtensionHandler()
 
 	// 启动 Codex OAuth 回调服务
 	if err := services.GetCodexOAuthService().EnsureCallbackServer(); err != nil {
@@ -58,6 +59,14 @@ func main() {
 
 		// 账号导入（API Key认证）
 		api.POST("/accounts/import", accountHandler.Import)
+
+		// 扩展接口（用于浏览器插件）
+		extension := api.Group("/extension")
+		extension.Use(middleware.ExtensionAuthMiddleware())
+		{
+			extension.GET("/account", extensionHandler.LookupAccountByURL)
+			extension.POST("/billing-success", extensionHandler.BillingSuccess)
+		}
 
 		// 需要登录的路由
 		auth := api.Group("")

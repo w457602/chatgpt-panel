@@ -90,6 +90,19 @@ go build -o chatgpt-panel ./cmd/main.go
 }
 ```
 
+### 浏览器插件对接（可选）
+
+用于根据绑卡页面 URL 查找账号邮箱，并在绑卡成功后更新状态。
+
+- `GET /api/v1/extension/account?url=...` - 根据 checkout_url 查找账号（返回 id/email/status）
+- `POST /api/v1/extension/billing-success` - 绑卡成功回传（body: `{"url":"...","account_id":123,"status":"active"}`)
+
+如需开启扩展 Token 校验，请在 `.env` 中设置：
+
+```
+EXTENSION_TOKEN=your-extension-token
+```
+
 ## 集成到注册脚本
 
 在注册脚本中，注册成功后调用导入 API：
@@ -123,4 +136,3 @@ chatgpt-panel/
 ├── go.mod
 └── README.md
 ```
-

@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -43,6 +44,48 @@ func (s *AccountService) GetByEmail(email string) (*models.Account, error) {
 	return &account, nil
 }
 
+func normalizeCheckoutURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func (s *AccountService) GetByCheckoutURL(raw string) (*models.Account, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("checkout_url is required")
+	}
+
+	var account models.Account
+	if err := s.db.Where("checkout_url = ?", raw).First(&account).Error; err == nil {
+		return &account, nil
+	}
+
+	normalized := normalizeCheckoutURL(raw)
+	if normalized != "" && normalized != raw {
+		if err := s.db.Where("checkout_url = ?", normalized).First(&account).Error; err == nil {
+			return &account, nil
+		}
+	}
+
+	if normalized == "" {
+		normalized = raw
+	}
+
+	if err := s.db.Where("checkout_url LIKE ?", normalized+"%").Order("updated_at desc").First(&account).Error; err != nil {
+		return nil, err
+	}
+	return &account, nil
+}
+
 func (s *AccountService) Update(account *models.Account) error {
 	return s.db.Save(account).Error
 }
@@ -60,6 +103,23 @@ func (s *AccountService) UpdateStatus(id uint, status string) error {
 		return errors.New("invalid status")
 	}
 	return s.db.Model(&models.Account{}).Where("id = ?", id).Update("status", status).Error
+}
+
+func (s *AccountService) UpdateStatusAndSubscription(id uint, status, subscription string) error {
+	updates := map[string]interface{}{}
+	if status != "" {
+		if !isValidStatus(status) {
+			return errors.New("invalid status")
+		}
+		updates["status"] = status
+	}
+	if subscription != "" {
+		updates["subscription_status"] = subscription
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	return s.db.Model(&models.Account{}).Where("id = ?", id).Updates(updates).Error
 }
 
 func (s *AccountService) BatchUpdateStatus(ids []uint, status string) error {
@@ -80,7 +140,7 @@ func (s *AccountService) UpdateRefreshToken(id uint, refreshToken string) error 
 
 func isValidStatus(status string) bool {
 	switch status {
-	case "pending", "active", "failed", "expired":
+	case "pending", "active", "failed", "expired", "bound":
 		return true
 	}
 	return false
