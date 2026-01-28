@@ -749,6 +749,7 @@ async function triggerAdapterAutoFill(tabId, pageType, url, options = {}) {
   const maxRetries = autoRetryEnabled
     ? Number(result.maxRetryAttempts) || 0
     : 0;
+  const normalizedMaxRetries = maxRetries === 5 ? 10 : maxRetries;
   const addressRegion = result.addressRegion || 'US_TAX_FREE';
   const onlyChangeCardNumber = !!result.onlyChangeCardNumber;
 
@@ -780,7 +781,7 @@ async function triggerAdapterAutoFill(tabId, pageType, url, options = {}) {
           config: {
             bin: bin,
             patternInput: patternInput,
-            maxRetries: maxRetries,
+            maxRetries: normalizedMaxRetries,
             addressRegion: addressRegion,
             binAddress: binAddress,
             onlyFill: onlyFill,

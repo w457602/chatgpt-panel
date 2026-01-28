@@ -49,6 +49,86 @@ function loadNextScript() {
 // 开始加载第一个脚本
 loadNextScript();
 
+// ==================== 悬浮一键绑卡按钮 ====================
+
+const FLOATING_BTN_ID = 'atm-floating-bind-btn';
+
+function isSupportedHost(hostname) {
+  const host = (hostname || '').toLowerCase();
+  return (
+    host.endsWith('augmentcode.com') ||
+    host.includes('cursor.com') ||
+    host === 'checkout.stripe.com' ||
+    host === 'pay.openai.com' ||
+    host === 'chatgpt.com'
+  );
+}
+
+function ensureFloatingButton() {
+  if (window.top !== window) return;
+  if (!isSupportedHost(window.location.hostname)) return;
+  if (document.getElementById(FLOATING_BTN_ID)) return;
+
+  const btn = document.createElement('button');
+  btn.id = FLOATING_BTN_ID;
+  btn.textContent = '一键绑卡';
+  btn.style.position = 'fixed';
+  btn.style.right = '16px';
+  btn.style.bottom = '20px';
+  btn.style.zIndex = '999999';
+  btn.style.padding = '10px 14px';
+  btn.style.background = '#2563eb';
+  btn.style.color = '#fff';
+  btn.style.border = 'none';
+  btn.style.borderRadius = '999px';
+  btn.style.boxShadow = '0 6px 16px rgba(0,0,0,0.2)';
+  btn.style.fontSize = '14px';
+  btn.style.fontWeight = '600';
+  btn.style.cursor = 'pointer';
+  btn.style.userSelect = 'none';
+
+  btn.addEventListener('mouseenter', () => {
+    btn.style.background = '#1d4ed8';
+  });
+  btn.addEventListener('mouseleave', () => {
+    btn.style.background = '#2563eb';
+  });
+
+  btn.addEventListener('click', () => {
+    chrome.runtime
+      .sendMessage({ action: 'bindCard' })
+      .catch(() => {});
+  });
+
+  const attach = () => {
+    if (document.body) {
+      document.body.appendChild(btn);
+      return true;
+    }
+    return false;
+  };
+
+  if (!attach()) {
+    const timer = setInterval(() => {
+      if (attach()) clearInterval(timer);
+    }, 200);
+  }
+}
+
+function refreshFloatingButton() {
+  if (window.top !== window) return;
+  const supported = isSupportedHost(window.location.hostname);
+  const existing = document.getElementById(FLOATING_BTN_ID);
+  if (supported) {
+    if (!existing) ensureFloatingButton();
+  } else if (existing) {
+    existing.remove();
+  }
+}
+
+ensureFloatingButton();
+setInterval(refreshFloatingButton, 1000);
+
 // 监听来自 injected.js 的消息
 window.addEventListener('message', (event) => {
   // 只接受来自同一窗口的消息
