@@ -12,6 +12,7 @@ const contentScriptReady = new Map(); // tabId -> boolean
 const PANEL_API_BASE_DEFAULT = 'https://chatgptpanel.zeabur.app';
 const PANEL_API_BASE_KEY = 'panelApiBase';
 const PANEL_API_TOKEN_KEY = 'panelApiToken';
+const AUTO_BIND_ON_DETECT_KEY = 'autoBindOnDetect';
 
 // 监听 tab 关闭事件，清理状态
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -163,7 +164,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
       autoFillDelay: 1500,
       hasOpenedPanel: false,
       panelApiBase: PANEL_API_BASE_DEFAULT,
-      panelApiToken: ''
+      panelApiToken: '',
+      autoBindOnDetect: false
     });
   }
 });
@@ -195,14 +197,19 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       const result = await chrome.storage.local.get([
         'autoOpenSetting',
         'autoRegisterEnabled',
-        'autoFillDelay'
+        'autoFillDelay',
+        AUTO_BIND_ON_DETECT_KEY
       ]);
       const autoRegisterEnabled = result.autoRegisterEnabled || false;
       const autoFillDelay = result.autoFillDelay || 1500;
+      const autoBindOnDetect = !!result[AUTO_BIND_ON_DETECT_KEY];
 
       // 如果开启了自动注册，则自动填充
       if (autoRegisterEnabled) {
         await handleAutoFill(tabId, pageType, autoFillDelay, url);
+      } else if (autoBindOnDetect) {
+        await handleAutoFill(tabId, pageType, autoFillDelay, url);
+        chrome.storage.local.set({ [AUTO_BIND_ON_DETECT_KEY]: false }).catch(() => {});
       }
     }
   } catch (error) {}
@@ -311,6 +318,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // 处理 action 属性的消息
   if (message.action === 'bindCard') {
     // 使用 Promise 处理异步操作
+    chrome.storage.local
+      .set({ [AUTO_BIND_ON_DETECT_KEY]: true })
+      .catch(() => {});
     handleBindCard(sender, message)
       .then((result) => {
         sendResponse(result);
