@@ -83,11 +83,6 @@
                     <span x-show="!batchTestingAll">一键检测全部账号</span>
                     <span x-show="batchTestingAll"><i class="fas fa-spinner fa-spin"></i> 启动中...</span>
                 </button>
-                <button @click="syncCliproxy" class="bg-indigo-500 text-white px-3 py-1 rounded hover:bg-indigo-600" :disabled="cliproxySyncing">
-                    <span x-show="!cliproxySyncing">同步到 CLIProxyAPI</span>
-                    <span x-show="cliproxySyncing"><i class="fas fa-spinner fa-spin"></i> 同步中...</span>
-                </button>
-                <span class="text-sm text-gray-500" x-show="cliproxySyncMessage" x-text="cliproxySyncMessage"></span>
             </div>
 
             <!-- 筛选栏 -->
@@ -180,6 +175,9 @@
                                         </button>
                                         <button @click="refreshToken(account)" class="text-green-500 hover:text-green-700" title="刷新Token" x-show="account.refresh_token">
                                             <i class="fas fa-sync-alt"></i>
+                                        </button>
+                                        <button @click="syncCliproxyAccount(account)" class="text-indigo-500 hover:text-indigo-700" :class="(!account.refresh_token || account.syncing) ? 'opacity-50 pointer-events-none' : ''" title="同步到 CLIProxyAPI">
+                                            <i class="fas" :class="account.syncing ? 'fa-spinner fa-spin' : 'fa-cloud-arrow-up'"></i>
                                         </button>
                                         <button @click="refreshSubscription(account)" class="text-orange-500 hover:text-orange-700" title="刷新订阅状态" x-show="account.access_token">
                                             <i class="fas fa-crown"></i>
@@ -435,8 +433,6 @@
                     success: false,
                     details: ''
                 },
-                cliproxySyncing: false,
-                cliproxySyncMessage: '',
                 showOAuthModal: false,
                 oauthData: {
                     accountId: null,
@@ -679,26 +675,27 @@
                     }
                 },
 
-                async syncCliproxy() {
-                    if (!confirm('确定同步所有已获取 RT 的账号到 CLIProxyAPI?')) return;
-                    this.cliproxySyncing = true;
-                    this.cliproxySyncMessage = '';
+                async syncCliproxyAccount(account) {
+                    if (!account?.id) return;
+                    if (!account.refresh_token) {
+                        alert('账号无 refresh_token，无法同步');
+                        return;
+                    }
+                    if (!confirm(`确定同步 ${account.email} 到 CLIProxyAPI？`)) return;
+                    account.syncing = true;
                     try {
-                        const res = await this.api('/api/v1/accounts/cliproxy-sync', { method: 'POST' });
+                        const res = await this.api(`/api/v1/accounts/${account.id}/cliproxy-sync`, { method: 'POST' });
                         if (res?.error) {
-                            this.cliproxySyncMessage = '同步失败: ' + res.error;
-                            return;
+                            alert('同步失败: ' + res.error);
+                        } else {
+                            alert(res?.message || '同步成功');
+                            await this.loadAccounts();
+                            await this.loadStats();
                         }
-                        const failed = typeof res?.failed === 'number' ? res.failed : 0;
-                        const success = typeof res?.success === 'number' ? res.success : 0;
-                        const total = typeof res?.total === 'number' ? res.total : success + failed;
-                        this.cliproxySyncMessage = `同步完成: 成功 ${success} / 总数 ${total} / 失败 ${failed}`;
-                        await this.loadAccounts();
-                        await this.loadStats();
                     } catch (e) {
-                        this.cliproxySyncMessage = '同步失败: ' + e.message;
+                        alert('同步失败: ' + e.message);
                     } finally {
-                        this.cliproxySyncing = false;
+                        account.syncing = false;
                     }
                 },
 

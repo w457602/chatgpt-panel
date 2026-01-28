@@ -110,7 +110,6 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		return
 	}
 
-	services.GetCliproxySyncService().Enqueue(account)
 	c.JSON(http.StatusCreated, account)
 }
 
@@ -169,8 +168,6 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
-	services.GetCliproxySyncService().Enqueue(account)
 	c.JSON(http.StatusOK, account)
 }
 
@@ -272,7 +269,6 @@ func (h *AccountHandler) UpdateRefreshToken(c *gin.Context) {
 				_ = h.accountService.Update(account)
 			}
 		}
-		services.GetCliproxySyncService().Enqueue(account)
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Refresh token updated"})
 }
@@ -327,7 +323,7 @@ func (h *AccountHandler) Import(c *gin.Context) {
 				continue
 			}
 			lastAccount = merged
-			services.GetCliproxySyncService().Enqueue(merged)
+			// 手动同步
 		} else {
 			applyImportDefaults(account, meta)
 			if err := h.accountService.Create(account); err != nil {
@@ -335,7 +331,7 @@ func (h *AccountHandler) Import(c *gin.Context) {
 				continue
 			}
 			lastAccount = account
-			services.GetCliproxySyncService().Enqueue(account)
+			// 手动同步
 		}
 
 		imported++
@@ -391,6 +387,44 @@ func (h *AccountHandler) SyncCliproxy(c *gin.Context) {
 		"failures": failures,
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// SyncCliproxyAccount 手动同步单个账号到 CLIProxyAPI
+func (h *AccountHandler) SyncCliproxyAccount(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	account, err := h.accountService.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Account not found"})
+		return
+	}
+
+	if !services.GetCliproxySyncService().Enabled() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cliproxy sync is not configured"})
+		return
+	}
+
+	if strings.TrimSpace(account.RefreshToken) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "账号无 refresh_token"})
+		return
+	}
+
+	accountCopy := *account
+	if !services.GetCliproxySyncService().Eligible(&accountCopy) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "账号订阅状态不支持同步"})
+		return
+	}
+
+	if err := services.GetCliproxySyncService().SyncAccount(c.Request.Context(), &accountCopy); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "同步成功"})
 }
 
 type importAccountPayload struct {

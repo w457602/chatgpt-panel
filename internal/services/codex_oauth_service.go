@@ -290,7 +290,7 @@ func (s *CodexOAuthService) updateAccount(accountID uint, token *codexTokenRespo
 
 	account.AccessToken = token.AccessToken
 	account.Status = "active"
-	GetCliproxySyncService().Enqueue(&account)
+	// 手动同步
 	return nil
 }
 

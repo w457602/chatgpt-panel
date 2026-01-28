@@ -95,6 +95,7 @@ func main() {
 			auth.POST("/accounts/batch-status", accountHandler.BatchUpdateStatus)
 			auth.PATCH("/accounts/:id/refresh-token", accountHandler.UpdateRefreshToken)
 			auth.POST("/accounts/cliproxy-sync", accountHandler.SyncCliproxy)
+			auth.POST("/accounts/:id/cliproxy-sync", accountHandler.SyncCliproxyAccount)
 
 			// 账号测试
 			auth.POST("/accounts/:id/test", accountHandler.TestAccount)
