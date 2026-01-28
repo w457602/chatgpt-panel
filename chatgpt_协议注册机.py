@@ -14,11 +14,67 @@ import uuid
 import pybase64
 import threading
 import os
+import base64
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlencode, urlparse, parse_qs
 
 from curl_cffi import requests
+
+
+# ============================================================================
+# JWT 解析工具
+# ============================================================================
+def decode_jwt_payload(token: str) -> Optional[Dict]:
+    """解码 JWT token 的 payload 部分（不验证签名）"""
+    if not token:
+        return None
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        # 解码 payload 部分
+        payload_b64 = parts[1]
+        # 添加 padding
+        padding = (4 - len(payload_b64) % 4) % 4
+        payload_b64 += "=" * padding
+        payload_bytes = base64.urlsafe_b64decode(payload_b64)
+        return json.loads(payload_bytes.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def extract_subscription_from_token(access_token: str) -> str:
+    """从 access_token 中提取订阅状态"""
+    payload = decode_jwt_payload(access_token)
+    if not payload:
+        return "free"
+
+    # 尝试从 chatgpt_plan_type 字段获取
+    plan_type = payload.get("chatgpt_plan_type")
+    if plan_type:
+        return normalize_subscription_status(plan_type)
+
+    # 尝试从 https://api.openai.com/auth 字段获取
+    auth_info = payload.get("https://api.openai.com/auth", {})
+    if isinstance(auth_info, dict):
+        plan_type = auth_info.get("chatgpt_plan_type") or auth_info.get("plan_type")
+        if plan_type:
+            return normalize_subscription_status(plan_type)
+
+    return "free"
+
+
+def normalize_subscription_status(raw: str) -> str:
+    """标准化订阅状态"""
+    if not raw:
+        return "free"
+    value = raw.lower().strip()
+    if value == "chatgptteamplan":
+        return "team"
+    if value in ("free", "plus", "team", "business", "pro"):
+        return value
+    return value
 
 # ============================================================================
 # 配置
@@ -1009,6 +1065,10 @@ class ChatGPTRegister:
                 account_id = account_info.get("id")
                 expired = session_data.get("expires")
 
+            # 从 access_token 中提取订阅状态
+            subscription_status = extract_subscription_from_token(access_token) if access_token else "free"
+            print(f"{prefix} 📊 订阅状态: {subscription_status}")
+
             # 获取绑卡链接（只保存到txt）
             checkout_url = None
             if access_token:
@@ -1022,7 +1082,8 @@ class ChatGPTRegister:
                 "email": email,
                 "expired": expired,
                 "last_refresh": now_time,
-                "type": "free",
+                "type": subscription_status,  # 使用从 token 中提取的订阅状态
+                "subscription_status": subscription_status,  # 添加 subscription_status 字段
                 "cookies": client.get_cookies(),
                 "created_at": now_time
             }
@@ -1112,6 +1173,7 @@ class ChatGPTRegister:
             "account_id": account.get("account_id", ""),
             "session_cookies": account.get("cookies", []),
             "status": "active" if account.get("access_token") else "pending",
+            "subscription_status": account.get("subscription_status", account.get("type", "free")),  # 添加订阅状态
             "name": account.get("name", ""),
             "created_at": account.get("created_at", ""),
             "last_refresh": account.get("last_refresh", ""),

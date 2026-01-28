@@ -774,3 +774,45 @@ func (h *AccountHandler) RefreshAccountToken(c *gin.Context) {
 		"access_token": result.AccessToken[:50] + "...",
 	})
 }
+
+// RefreshSubscriptionStatus 从现有 access_token 中刷新订阅状态
+func (h *AccountHandler) RefreshSubscriptionStatus(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	account, err := h.accountService.GetByID(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Account not found"})
+		return
+	}
+
+	if account.AccessToken == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "账号无 access_token"})
+		return
+	}
+
+	// 从 access_token 中提取订阅状态
+	plan := services.ExtractSubscriptionStatusFromToken(account.AccessToken)
+	if plan == "" {
+		plan = "free"
+	}
+
+	oldStatus := account.SubscriptionStatus
+	if plan != oldStatus {
+		account.SubscriptionStatus = plan
+		if err := h.accountService.Update(account); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":             "订阅状态已刷新",
+		"subscription_status": plan,
+		"old_status":          oldStatus,
+		"changed":             plan != oldStatus,
+	})
+}

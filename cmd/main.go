@@ -85,6 +85,7 @@ func main() {
 			auth.POST("/accounts/batch-test", accountHandler.BatchTestAccounts)
 			auth.GET("/accounts/batch-test/:task_id", accountHandler.GetBatchTestResult)
 			auth.POST("/accounts/:id/refresh", accountHandler.RefreshAccountToken)
+			auth.POST("/accounts/:id/refresh-subscription", accountHandler.RefreshSubscriptionStatus)
 
 			// Codex OAuth (PKCE)
 			auth.POST("/oauth/codex/start", oauthHandler.StartCodex)
