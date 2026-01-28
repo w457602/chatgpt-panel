@@ -717,6 +717,34 @@ func (h *AccountHandler) BatchTestAccounts(c *gin.Context) {
 	})
 }
 
+// BatchTestAllAccounts 一键检测全部账号
+func (h *AccountHandler) BatchTestAllAccounts(c *gin.Context) {
+	var ids []uint
+	if err := models.GetDB().Model(&models.Account{}).
+		Where("status NOT IN ?", []string{"bound", "banned"}).
+		Where("access_token IS NOT NULL AND access_token != ''").
+		Pluck("id", &ids).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no accounts found"})
+		return
+	}
+
+	taskID, err := h.accountTestService.BatchTestAccounts(c.Request.Context(), ids)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"task_id": taskID,
+		"message": "批量测试已开始",
+		"total":   len(ids),
+	})
+}
+
 // GetBatchTestResult 获取批量测试结果
 func (h *AccountHandler) GetBatchTestResult(c *gin.Context) {
 	taskID := c.Param("task_id")

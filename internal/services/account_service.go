@@ -140,7 +140,7 @@ func (s *AccountService) UpdateRefreshToken(id uint, refreshToken string) error 
 
 func isValidStatus(status string) bool {
 	switch status {
-	case "pending", "active", "failed", "expired", "bound":
+	case "pending", "active", "bound", "failed", "expired", "banned", "rate_limited":
 		return true
 	}
 	return false
@@ -243,8 +243,11 @@ func (s *AccountService) GetStats() (*models.AccountStats, error) {
 	s.db.Model(&models.Account{}).Count(&stats.Total)
 	s.db.Model(&models.Account{}).Where("status = ?", "pending").Count(&stats.Pending)
 	s.db.Model(&models.Account{}).Where("status = ?", "active").Count(&stats.Active)
+	s.db.Model(&models.Account{}).Where("status = ?", "bound").Count(&stats.Bound)
 	s.db.Model(&models.Account{}).Where("status = ?", "failed").Count(&stats.Failed)
 	s.db.Model(&models.Account{}).Where("status = ?", "expired").Count(&stats.Expired)
+	s.db.Model(&models.Account{}).Where("status = ?", "banned").Count(&stats.Banned)
+	s.db.Model(&models.Account{}).Where("status = ?", "rate_limited").Count(&stats.RateLimited)
 
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -258,6 +261,7 @@ func (s *AccountService) GetStats() (*models.AccountStats, error) {
 	s.db.Model(&models.Account{}).Where("access_token IS NOT NULL AND access_token != ''").Count(&stats.WithToken)
 	s.db.Model(&models.Account{}).Where("refresh_token IS NOT NULL AND refresh_token != ''").Count(&stats.WithRefreshToken)
 	s.db.Model(&models.Account{}).Where("checkout_url IS NOT NULL AND checkout_url != ''").Count(&stats.WithCheckoutURL)
+	s.db.Model(&models.Account{}).Where("cliproxy_synced = ?", true).Count(&stats.CliproxySynced)
 
 	var domainCounts []struct {
 		Domain string

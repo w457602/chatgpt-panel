@@ -92,6 +92,7 @@ func main() {
 			// 账号测试
 			auth.POST("/accounts/:id/test", accountHandler.TestAccount)
 			auth.POST("/accounts/batch-test", accountHandler.BatchTestAccounts)
+			auth.POST("/accounts/batch-test-all", accountHandler.BatchTestAllAccounts)
 			auth.GET("/accounts/batch-test/:task_id", accountHandler.GetBatchTestResult)
 			auth.POST("/accounts/:id/refresh", accountHandler.RefreshAccountToken)
 			auth.POST("/accounts/:id/refresh-subscription", accountHandler.RefreshSubscriptionStatus)

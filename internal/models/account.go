@@ -54,8 +54,11 @@ type AccountStats struct {
 	Total            int64            `json:"total"`
 	Pending          int64            `json:"pending"`
 	Active           int64            `json:"active"`
+	Bound            int64            `json:"bound"`
 	Failed           int64            `json:"failed"`
 	Expired          int64            `json:"expired"`
+	Banned           int64            `json:"banned"`
+	RateLimited      int64            `json:"rate_limited"`
 	TodayCount       int64            `json:"today_count"`
 	WeekCount        int64            `json:"week_count"`
 	MonthCount       int64            `json:"month_count"`
@@ -64,6 +67,7 @@ type AccountStats struct {
 	WithToken        int64            `json:"with_token"`
 	WithRefreshToken int64            `json:"with_refresh_token"`
 	WithCheckoutURL  int64            `json:"with_checkout_url"`
+	CliproxySynced   int64            `json:"cliproxy_synced"`
 }
 
 // DateCount 按日期统计
