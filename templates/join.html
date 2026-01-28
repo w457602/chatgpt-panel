@@ -46,10 +46,18 @@
             try {
                 const res = await fetch('/api/v1/invite/join', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                     body: JSON.stringify({ code, email })
                 });
-                const data = await res.json().catch(() => ({}));
+                const text = await res.text();
+                let data = {};
+                if (text) {
+                    try {
+                        data = JSON.parse(text);
+                    } catch (e) {
+                        data = { error: text.slice(0, 300) };
+                    }
+                }
 
                 if (res.ok) {
                     statusEl.textContent = data.message || '邀请已发送，请查收邮件';

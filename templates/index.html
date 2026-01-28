@@ -618,7 +618,8 @@
                 async loadInviteAccounts() {
                     const params = new URLSearchParams({ page: 1, page_size: 100, sort_by: 'updated_at', sort_dir: 'desc' });
                     const res = await this.api('/api/v1/accounts?' + params);
-                    this.inviteAccounts = res?.data || [];
+                    const list = res?.data || [];
+                    this.inviteAccounts = list.filter(acc => acc.access_token || acc.refresh_token);
                     this.inviteAccountsMeta = { loaded: true, total: res?.total || this.inviteAccounts.length };
                 },
 
