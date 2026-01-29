@@ -117,6 +117,10 @@ class Config:
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     SEC_CH_UA = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
 
+    # 邮箱域名黑名单（由 tools/check_mailbox.py 维护）
+    BANNED_DOMAIN_FILE = "banned_email_domains.txt"
+    EMAIL_MAX_RETRY = 10
+
 
 def _resolve_bark_config() -> Tuple[bool, str, str]:
     """读取 Bark 配置（支持环境变量覆盖）"""
@@ -474,6 +478,31 @@ class MailClient:
         }
         self.domains: List[str] = ["chatgpt.org.uk"]  # 默认域名
         self.current_email: Optional[str] = None
+        self.banned_domains = self._load_banned_domains()
+
+    def _load_banned_domains(self) -> set:
+        """加载禁用域名列表"""
+        domains = set()
+        path = Config.BANNED_DOMAIN_FILE
+        if not path:
+            return domains
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip().lower()
+                        if not line or line.startswith("#"):
+                            continue
+                        domains.add(line)
+            except Exception as e:
+                print(f"⚠️ 读取禁用域名失败: {e}")
+        return domains
+
+    def _is_banned_domain(self, email: str) -> bool:
+        if "@" not in email:
+            return False
+        domain = email.split("@", 1)[1].lower().strip()
+        return domain in self.banned_domains
 
     def login(self) -> bool:
         """无需登录，直接返回成功"""
@@ -487,24 +516,31 @@ class MailClient:
 
     def create_email(self, prefix: str = None, domain_index: int = 0) -> Optional[str]:
         """从API获取新的临时邮箱地址"""
-        try:
-            resp = self.session.get(
-                f"{Config.MAIL_API_BASE}/generate-email",
-                headers={**self.headers, "content-type": "application/json"},
-                timeout=Config.TIMEOUT
-            )
-            if resp.status_code == 200:
-                result = resp.json()
-                if result.get('success') and result.get('data', {}).get('email'):
-                    email = result['data']['email']
-                    self.current_email = email
-                    print(f"✅ 获取邮箱: {email}")
-                    return email
-            print(f"❌ 获取邮箱失败: {resp.status_code} - {resp.text[:100]}")
-            return None
-        except Exception as e:
-            print(f"❌ 获取邮箱异常: {e}")
-            return None
+        # 运行中可能新增黑名单，按需刷新一次
+        self.banned_domains = self._load_banned_domains()
+        for attempt in range(Config.EMAIL_MAX_RETRY):
+            try:
+                resp = self.session.get(
+                    f"{Config.MAIL_API_BASE}/generate-email",
+                    headers={**self.headers, "content-type": "application/json"},
+                    timeout=Config.TIMEOUT
+                )
+                if resp.status_code == 200:
+                    result = resp.json()
+                    if result.get('success') and result.get('data', {}).get('email'):
+                        email = result['data']['email']
+                        if self._is_banned_domain(email):
+                            print(f"⚠️ 禁用域名邮箱，已跳过: {email}")
+                            continue
+                        self.current_email = email
+                        print(f"✅ 获取邮箱: {email}")
+                        return email
+                print(f"❌ 获取邮箱失败: {resp.status_code} - {resp.text[:100]}")
+            except Exception as e:
+                print(f"❌ 获取邮箱异常: {e}")
+            time.sleep(0.5)
+        print("❌ 获取邮箱失败：全部域名被禁用或多次失败")
+        return None
 
     def _fetch_messages(self, email: str) -> List[dict]:
         """获取邮箱中的邮件列表"""

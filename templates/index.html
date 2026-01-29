@@ -48,27 +48,27 @@
         <!-- 统计卡片 -->
         <div class="max-w-7xl mx-auto px-4 py-6">
                 <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
-                    <div class="bg-white rounded-lg shadow p-4">
+                    <div class="bg-white rounded-lg shadow p-4 cursor-pointer hover:bg-gray-50" @click="applyCardFilter('total')">
                         <div class="text-sm text-gray-500">总账号</div>
                         <div class="text-2xl font-bold" x-text="stats.total || 0"></div>
                     </div>
-                <div class="bg-white rounded-lg shadow p-4">
+                <div class="bg-white rounded-lg shadow p-4 cursor-pointer hover:bg-gray-50" @click="applyCardFilter('pending')">
                     <div class="text-sm text-gray-500">待绑卡</div>
                     <div class="text-2xl font-bold text-yellow-500" x-text="stats.pending || 0"></div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-4">
+                <div class="bg-white rounded-lg shadow p-4 cursor-pointer hover:bg-gray-50" @click="applyCardFilter('sync')">
                     <div class="text-sm text-gray-500">已同步</div>
                     <div class="text-2xl font-bold text-blue-500" x-text="stats.cliproxy_synced || 0"></div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-4">
+                <div class="bg-white rounded-lg shadow p-4 cursor-pointer hover:bg-gray-50" @click="applyCardFilter('banned')">
                     <div class="text-sm text-gray-500">已封禁</div>
                     <div class="text-2xl font-bold text-rose-500" x-text="stats.banned || 0"></div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-4">
+                <div class="bg-white rounded-lg shadow p-4 cursor-pointer hover:bg-gray-50" @click="applyCardFilter('failed')">
                     <div class="text-sm text-gray-500">失败</div>
                     <div class="text-2xl font-bold text-red-500" x-text="stats.failed || 0"></div>
                 </div>
-                <div class="bg-white rounded-lg shadow p-4">
+                <div class="bg-white rounded-lg shadow p-4 cursor-pointer hover:bg-gray-50" @click="applyCardFilter('expired')">
                     <div class="text-sm text-gray-500">已过期</div>
                     <div class="text-2xl font-bold text-gray-500" x-text="stats.expired || 0"></div>
                 </div>
@@ -79,10 +79,6 @@
                 <button @click="openImportModal" class="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600">导入账号</button>
                 <button @click="openInviteModal" class="bg-sky-500 text-white px-3 py-1 rounded hover:bg-sky-600">邀请码管理</button>
                 <a href="/join" target="_blank" class="bg-gray-200 text-gray-700 px-3 py-1 rounded hover:bg-gray-300">自动加入页</a>
-                <button @click="batchTestAllAccounts" class="bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600" :disabled="batchTestingAll || batchTestTaskId">
-                    <span x-show="!batchTestingAll">一键检测全部账号</span>
-                    <span x-show="batchTestingAll"><i class="fas fa-spinner fa-spin"></i> 启动中...</span>
-                </button>
             </div>
 
             <!-- 筛选栏 -->
@@ -113,7 +109,6 @@
             <!-- 批量操作 -->
             <div x-show="selectedIds.length > 0" class="bg-blue-50 rounded-lg p-4 mb-4 flex items-center gap-4">
                 <span>已选择 <span x-text="selectedIds.length"></span> 项</span>
-                <button @click="batchTestAccounts" class="bg-purple-500 text-white px-3 py-1 rounded">批量测试</button>
                 <button @click="batchUpdateStatus('active')" class="bg-green-500 text-white px-3 py-1 rounded">标记激活</button>
                 <button @click="batchUpdateStatus('failed')" class="bg-red-500 text-white px-3 py-1 rounded">标记失败</button>
                 <button @click="batchDelete" class="bg-red-600 text-white px-3 py-1 rounded">批量删除</button>
@@ -167,9 +162,6 @@
                                 <td class="px-4 py-3 text-sm text-gray-500" x-text="formatDate(account.registered_at)"></td>
                                 <td class="px-4 py-3">
                                     <div class="flex gap-2">
-                                        <button @click="testAccount(account)" class="text-purple-500 hover:text-purple-700" title="测试账号" :disabled="account.testing">
-                                            <i class="fas" :class="account.testing ? 'fa-spinner fa-spin' : 'fa-vial'"></i>
-                                        </button>
                                         <button @click="openOAuth(account)" class="text-blue-500 hover:text-blue-700" title="OAuth授权">
                                             <i class="fas fa-key"></i>
                                         </button>
@@ -417,14 +409,11 @@
                 loginError: '',
                 accounts: [],
                 stats: {},
-                filter: { search: '', status: '', has_rt: '', date_from: '', date_to: '', page: 1, page_size: 20 },
+                filter: { search: '', status: '', has_rt: '', cliproxy_synced: '', date_from: '', date_to: '', page: 1, page_size: 20 },
                 pagination: { total: 0, page: 1, page_size: 20, total_pages: 0 },
                 selectedIds: [],
                 showModal: false,
                 currentAccount: null,
-                batchTestTaskId: null,
-                batchTestingAll: false,
-                testResults: {},
                 showImportModal: false,
                 importData: {
                     file: null,
@@ -530,8 +519,30 @@
                     }
                 },
 
+                applyCardFilter(type) {
+                    this.filter.page = 1;
+                    this.filter.search = '';
+                    this.filter.date_from = '';
+                    this.filter.date_to = '';
+                    this.filter.has_rt = '';
+                    this.filter.status = '';
+                    this.filter.cliproxy_synced = '';
+                    if (type === 'pending') {
+                        this.filter.status = 'pending';
+                    } else if (type === 'sync') {
+                        this.filter.cliproxy_synced = 'yes';
+                    } else if (type === 'banned') {
+                        this.filter.status = 'banned';
+                    } else if (type === 'failed') {
+                        this.filter.status = 'failed';
+                    } else if (type === 'expired') {
+                        this.filter.status = 'expired';
+                    }
+                    this.loadAccounts();
+                },
+
                 resetFilter() {
-                    this.filter = { search: '', status: '', has_rt: '', date_from: '', date_to: '', page: 1, page_size: 20 };
+                    this.filter = { search: '', status: '', has_rt: '', cliproxy_synced: '', date_from: '', date_to: '', page: 1, page_size: 20 };
                     this.loadAccounts();
                 },
 
@@ -767,80 +778,6 @@
                     }
                 },
 
-                async testAccount(account) {
-                    account.testing = true;
-                    try {
-                        const res = await this.api(`/api/v1/accounts/${account.id}/test`, { method: 'POST' });
-                        if (res) {
-                            this.testResults[account.id] = res;
-                            account.status = res.status;
-                            const statusMsg = res.valid ? '✅ 有效' : '❌ 无效';
-                            alert(`测试结果: ${statusMsg}\n${res.message}\n${res.models?.length ? '可用模型: ' + res.models.join(', ') : ''}`);
-                            this.loadStats();
-                        }
-                    } catch (e) {
-                        alert('测试失败: ' + e.message);
-                    } finally {
-                        account.testing = false;
-                    }
-                },
-
-                async batchTestAccounts() {
-                    if (this.selectedIds.length === 0) return;
-                    const res = await this.api('/api/v1/accounts/batch-test', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ ids: this.selectedIds })
-                    });
-                    if (res?.task_id) {
-                        this.batchTestTaskId = res.task_id;
-                        alert(`批量测试已开始，任务ID: ${res.task_id}`);
-                        this.pollBatchTestResult();
-                    }
-                },
-
-                async batchTestAllAccounts() {
-                    if (this.batchTestTaskId) {
-                        alert('已有批量测试任务进行中，请稍后再试');
-                        return;
-                    }
-                    if (!confirm('确定要检测全部账号吗？仅检测：有 AT 的账号。')) return;
-                    this.batchTestingAll = true;
-                    try {
-                        const res = await this.api('/api/v1/accounts/batch-test-all', { method: 'POST' });
-                        if (res?.task_id) {
-                            this.batchTestTaskId = res.task_id;
-                            const totalText = res.total ? `，总计: ${res.total}` : '';
-                            alert(`批量测试已开始，任务ID: ${res.task_id}${totalText}`);
-                            this.pollBatchTestResult();
-                        } else if (res?.error) {
-                            alert('启动失败: ' + res.error);
-                        }
-                    } catch (e) {
-                        alert('启动失败: ' + e.message);
-                    } finally {
-                        this.batchTestingAll = false;
-                    }
-                },
-
-                async pollBatchTestResult() {
-                    if (!this.batchTestTaskId) return;
-                    const poll = async () => {
-                        const res = await this.api(`/api/v1/accounts/batch-test/${this.batchTestTaskId}`);
-                        if (res) {
-                            if (!res.in_progress) {
-                                const valid = res.results.filter(r => r.valid).length;
-                                alert(`批量测试完成！\n总计: ${res.total}\n有效: ${valid}\n无效: ${res.total - valid}`);
-                                this.batchTestTaskId = null;
-                                this.loadAccounts();
-                                this.loadStats();
-                            } else {
-                                setTimeout(poll, 2000);
-                            }
-                        }
-                    };
-                    poll();
-                },
 
                 async refreshToken(account) {
                     try {

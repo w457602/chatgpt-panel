@@ -187,6 +187,11 @@ func (s *AccountService) List(filter models.AccountFilter) (*models.PaginatedRes
 	} else if filter.HasRT == "no" {
 		query = query.Where("refresh_token IS NULL OR refresh_token = ''")
 	}
+	if filter.CliproxySynced == "yes" {
+		query = query.Where("cliproxy_synced = ?", true)
+	} else if filter.CliproxySynced == "no" {
+		query = query.Where("cliproxy_synced = ?", false)
+	}
 	if filter.DateFrom != "" {
 		query = query.Where("created_at >= ?", filter.DateFrom)
 	}

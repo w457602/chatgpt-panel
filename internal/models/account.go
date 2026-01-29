@@ -41,6 +41,7 @@ type AccountFilter struct {
 	Status   string `form:"status"`
 	Domain   string `form:"domain"`
 	HasRT    string `form:"has_rt"` // 是否有 refresh_token: yes/no
+	CliproxySynced string `form:"cliproxy_synced"` // 是否已同步: yes/no
 	DateFrom string `form:"date_from"`
 	DateTo   string `form:"date_to"`
 	Page     int    `form:"page,default=1"`
