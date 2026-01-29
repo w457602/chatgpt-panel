@@ -17,7 +17,7 @@ import os
 import base64
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import urlencode, urlparse, parse_qs
+from urllib.parse import urlencode, urlparse, parse_qs, quote
 
 from curl_cffi import requests
 
@@ -107,10 +107,64 @@ class Config:
     PANEL_PASSWORD = "admin123"
     PANEL_IMPORT_ENABLED = True
 
+    # Bark 通知（注册成功后推送）
+    BARK_ENABLED = True
+    BARK_URL = "https://api.day.app/sJdCVyNSgBrkoXrrFA3pTD"
+    BARK_TITLE = "GPT注册成功"
+
     # 浏览器指纹
     IMPERSONATE = "chrome120"
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     SEC_CH_UA = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
+
+
+def _resolve_bark_config() -> Tuple[bool, str, str]:
+    """读取 Bark 配置（支持环境变量覆盖）"""
+    enabled_env = os.getenv("BARK_ENABLED")
+    if enabled_env is None:
+        enabled = bool(Config.BARK_ENABLED)
+    else:
+        enabled = enabled_env.strip().lower() in ("1", "true", "yes", "y")
+    base_url = os.getenv("BARK_URL") or Config.BARK_URL
+    title = os.getenv("BARK_TITLE") or Config.BARK_TITLE
+    return enabled, base_url, title
+
+
+def send_bark_message(text: str) -> bool:
+    """发送 Bark 文本消息"""
+    enabled, base_url, title = _resolve_bark_config()
+    if not enabled:
+        return False
+    if not base_url:
+        print("⚠️ Bark 未配置，跳过通知")
+        return False
+    try:
+        url = base_url.rstrip("/")
+        resp = requests.get(
+            url,
+            params={"title": title, "body": text},
+            timeout=Config.TIMEOUT,
+        )
+        if resp.status_code == 200:
+            print("📨 Bark 通知已发送")
+            return True
+        print(f"⚠️ Bark 发送失败: {resp.status_code} - {resp.text[:200]}")
+    except Exception as e:
+        print(f"⚠️ Bark 发送异常: {e}")
+    return False
+
+
+def notify_register_success(account: Dict, checkout_url: Optional[str]) -> None:
+    """注册成功后发送 Telegram 通知（可选）"""
+    lines = [
+        "✅ 注册成功",
+        f"邮箱: {account.get('email') or ''}",
+        f"账号ID: {account.get('account_id') or ''}",
+        f"订阅: {account.get('subscription_status') or account.get('type') or ''}",
+    ]
+    if checkout_url:
+        lines.append(f"绑卡链接: {checkout_url}")
+    send_bark_message("\n".join(lines))
 
 
 # ============================================================================
@@ -1098,6 +1152,7 @@ class ChatGPTRegister:
             print(f"\n{prefix} ✅ 注册成功! (当前成功: {current_success})")
             if checkout_url:
                 print(f"{prefix} 💳 支付链接: {checkout_url}")
+            notify_register_success(account, checkout_url)
             self._save_account(account)
             return account
 
