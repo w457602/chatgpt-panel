@@ -65,13 +65,25 @@ func (s *AccountService) GetByCheckoutURL(raw string) (*models.Account, error) {
 	}
 
 	var account models.Account
+
+	// 1. 精确匹配 checkout_url (Plus)
 	if err := s.db.Where("checkout_url = ?", raw).First(&account).Error; err == nil {
+		return &account, nil
+	}
+
+	// 2. 精确匹配 team_checkout_url (Team)
+	if err := s.db.Where("team_checkout_url = ?", raw).First(&account).Error; err == nil {
 		return &account, nil
 	}
 
 	normalized := normalizeCheckoutURL(raw)
 	if normalized != "" && normalized != raw {
+		// 3. 规范化后精确匹配 checkout_url
 		if err := s.db.Where("checkout_url = ?", normalized).First(&account).Error; err == nil {
+			return &account, nil
+		}
+		// 4. 规范化后精确匹配 team_checkout_url
+		if err := s.db.Where("team_checkout_url = ?", normalized).First(&account).Error; err == nil {
 			return &account, nil
 		}
 	}
@@ -80,7 +92,13 @@ func (s *AccountService) GetByCheckoutURL(raw string) (*models.Account, error) {
 		normalized = raw
 	}
 
-	if err := s.db.Where("checkout_url LIKE ?", normalized+"%").Order("updated_at desc").First(&account).Error; err != nil {
+	// 5. LIKE 模糊匹配 checkout_url
+	if err := s.db.Where("checkout_url LIKE ?", normalized+"%").Order("updated_at desc").First(&account).Error; err == nil {
+		return &account, nil
+	}
+
+	// 6. LIKE 模糊匹配 team_checkout_url
+	if err := s.db.Where("team_checkout_url LIKE ?", normalized+"%").Order("updated_at desc").First(&account).Error; err != nil {
 		return nil, err
 	}
 	return &account, nil
@@ -88,6 +106,14 @@ func (s *AccountService) GetByCheckoutURL(raw string) (*models.Account, error) {
 
 func (s *AccountService) Update(account *models.Account) error {
 	return s.db.Save(account).Error
+}
+
+func (s *AccountService) SetPlusBound(id uint, bound bool) error {
+	return s.db.Model(&models.Account{}).Where("id = ?", id).Update("plus_bound", bound).Error
+}
+
+func (s *AccountService) SetTeamBound(id uint, bound bool) error {
+	return s.db.Model(&models.Account{}).Where("id = ?", id).Update("team_bound", bound).Error
 }
 
 func (s *AccountService) Delete(id uint) error {
@@ -274,6 +300,7 @@ func (s *AccountService) GetStats() (*models.AccountStats, error) {
 	s.db.Model(&models.Account{}).Where("access_token IS NOT NULL AND access_token != ''").Count(&stats.WithToken)
 	s.db.Model(&models.Account{}).Where("refresh_token IS NOT NULL AND refresh_token != ''").Count(&stats.WithRefreshToken)
 	s.db.Model(&models.Account{}).Where("checkout_url IS NOT NULL AND checkout_url != ''").Count(&stats.WithCheckoutURL)
+	s.db.Model(&models.Account{}).Where("team_checkout_url IS NOT NULL AND team_checkout_url != ''").Count(&stats.WithTeamCheckoutURL)
 	s.db.Model(&models.Account{}).Where("cliproxy_synced = ?", true).Count(&stats.CliproxySynced)
 
 	var domainCounts []struct {

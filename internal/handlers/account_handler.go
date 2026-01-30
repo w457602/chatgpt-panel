@@ -86,15 +86,16 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	}
 
 	account := &models.Account{
-		Email:          req.Email,
-		Password:       req.Password,
-		AccessToken:    req.AccessToken,
-		RefreshToken:   req.RefreshToken,
-		CheckoutURL:    req.CheckoutURL,
-		AccountID:      req.AccountID,
-		SessionCookies: req.SessionCookies,
-		Status:         req.Status,
-		Name:           req.Name,
+		Email:           req.Email,
+		Password:        req.Password,
+		AccessToken:     req.AccessToken,
+		RefreshToken:    req.RefreshToken,
+		CheckoutURL:     req.CheckoutURL,
+		TeamCheckoutURL: req.TeamCheckoutURL,
+		AccountID:       req.AccountID,
+		SessionCookies:  req.SessionCookies,
+		Status:          req.Status,
+		Name:            req.Name,
 	}
 	planType := ""
 	if account.AccessToken != "" {
@@ -145,6 +146,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	account.AccessToken = req.AccessToken
 	account.RefreshToken = req.RefreshToken
 	account.CheckoutURL = req.CheckoutURL
+	account.TeamCheckoutURL = req.TeamCheckoutURL
 	account.AccountID = req.AccountID
 	account.SessionCookies = req.SessionCookies
 	account.Status = req.Status
@@ -433,6 +435,8 @@ type importAccountPayload struct {
 	AccessToken        string          `json:"access_token"`
 	RefreshToken       string          `json:"refresh_token"`
 	CheckoutURL        string          `json:"checkout_url"`
+	PlusCheckoutURL    string          `json:"plus_checkout_url"`
+	TeamCheckoutURL    string          `json:"team_checkout_url"`
 	AccountID          string          `json:"account_id"`
 	SessionCookies     json.RawMessage `json:"session_cookies"`
 	Cookies            json.RawMessage `json:"cookies"`
@@ -501,13 +505,20 @@ func normalizeImportPayload(payload importAccountPayload) (*models.Account, impo
 		return nil, meta, errors.New("email is required")
 	}
 
+	// 优先使用 plus_checkout_url，如果为空则使用 checkout_url（向后兼容）
+	checkoutURL := strings.TrimSpace(payload.PlusCheckoutURL)
+	if checkoutURL == "" {
+		checkoutURL = strings.TrimSpace(payload.CheckoutURL)
+	}
+
 	account := &models.Account{
-		Email:        email,
-		AccessToken:  strings.TrimSpace(payload.AccessToken),
-		RefreshToken: strings.TrimSpace(payload.RefreshToken),
-		CheckoutURL:  strings.TrimSpace(payload.CheckoutURL),
-		AccountID:    strings.TrimSpace(payload.AccountID),
-		Name:         strings.TrimSpace(payload.Name),
+		Email:           email,
+		AccessToken:     strings.TrimSpace(payload.AccessToken),
+		RefreshToken:    strings.TrimSpace(payload.RefreshToken),
+		CheckoutURL:     checkoutURL,
+		TeamCheckoutURL: strings.TrimSpace(payload.TeamCheckoutURL),
+		AccountID:       strings.TrimSpace(payload.AccountID),
+		Name:            strings.TrimSpace(payload.Name),
 	}
 
 	planType := ""
@@ -619,6 +630,9 @@ func mergeImportedAccount(existing *models.Account, incoming *models.Account, me
 	}
 	if incoming.CheckoutURL != "" {
 		merged.CheckoutURL = incoming.CheckoutURL
+	}
+	if incoming.TeamCheckoutURL != "" {
+		merged.TeamCheckoutURL = incoming.TeamCheckoutURL
 	}
 	if incoming.AccountID != "" {
 		merged.AccountID = incoming.AccountID

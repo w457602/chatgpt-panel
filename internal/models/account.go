@@ -15,6 +15,9 @@ type Account struct {
 	AccessToken        string          `gorm:"type:text" json:"access_token"`
 	RefreshToken       string          `gorm:"type:text" json:"refresh_token"`
 	CheckoutURL        string          `gorm:"size:1000" json:"checkout_url"`
+	TeamCheckoutURL    string          `gorm:"size:1000" json:"team_checkout_url"`
+	PlusBound          bool            `gorm:"default:false" json:"plus_bound"`  // Plus绑卡是否成功
+	TeamBound          bool            `gorm:"default:false" json:"team_bound"`  // Team绑卡是否成功
 	AccountID          string          `gorm:"index;size:100" json:"account_id"`
 	SubscriptionStatus string          `gorm:"index;size:50" json:"subscription_status"`
 	TokenExpired       *time.Time      `json:"token_expired"`
@@ -54,23 +57,24 @@ type AccountFilter struct {
 
 // AccountStats 统计信息
 type AccountStats struct {
-	Total            int64            `json:"total"`
-	Pending          int64            `json:"pending"`
-	Active           int64            `json:"active"`
-	Bound            int64            `json:"bound"`
-	Failed           int64            `json:"failed"`
-	Expired          int64            `json:"expired"`
-	Banned           int64            `json:"banned"`
-	RateLimited      int64            `json:"rate_limited"`
-	TodayCount       int64            `json:"today_count"`
-	WeekCount        int64            `json:"week_count"`
-	MonthCount       int64            `json:"month_count"`
-	ByDomain         map[string]int64 `json:"by_domain"`
-	ByDate           []DateCount      `json:"by_date"`
-	WithToken        int64            `json:"with_token"`
-	WithRefreshToken int64            `json:"with_refresh_token"`
-	WithCheckoutURL  int64            `json:"with_checkout_url"`
-	CliproxySynced   int64            `json:"cliproxy_synced"`
+	Total               int64            `json:"total"`
+	Pending             int64            `json:"pending"`
+	Active              int64            `json:"active"`
+	Bound               int64            `json:"bound"`
+	Failed              int64            `json:"failed"`
+	Expired             int64            `json:"expired"`
+	Banned              int64            `json:"banned"`
+	RateLimited         int64            `json:"rate_limited"`
+	TodayCount          int64            `json:"today_count"`
+	WeekCount           int64            `json:"week_count"`
+	MonthCount          int64            `json:"month_count"`
+	ByDomain            map[string]int64 `json:"by_domain"`
+	ByDate              []DateCount      `json:"by_date"`
+	WithToken           int64            `json:"with_token"`
+	WithRefreshToken    int64            `json:"with_refresh_token"`
+	WithCheckoutURL     int64            `json:"with_checkout_url"`
+	WithTeamCheckoutURL int64            `json:"with_team_checkout_url"`
+	CliproxySynced      int64            `json:"cliproxy_synced"`
 }
 
 // DateCount 按日期统计
@@ -95,6 +99,7 @@ type CreateAccountRequest struct {
 	AccessToken        string          `json:"access_token"`
 	RefreshToken       string          `json:"refresh_token"`
 	CheckoutURL        string          `json:"checkout_url"`
+	TeamCheckoutURL    string          `json:"team_checkout_url"`
 	AccountID          string          `json:"account_id"`
 	SubscriptionStatus string          `json:"subscription_status"`
 	SessionCookies     json.RawMessage `json:"session_cookies"`

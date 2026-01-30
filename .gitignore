@@ -19,6 +19,10 @@ tmp/
 # Python
 __pycache__/
 *.pyc
+.venv/
+venv/
+tools/.venv/
+tools/venv/
 
 # Logs
 *.log
@@ -28,3 +32,17 @@ chatgpt_accounts_api.json
 chatgpt_accounts_check_url.txt
 .tmp-cloudflared.yml
 codex-*.json
+oauth_tokens.json
+mailbox_results.json
+
+# Config files (sensitive)
+korea-vless-clash.yaml
+xray_config.json
+tools/cloudflared-config.yml
+
+# Debug files
+debug/
+
+# Temp/backup files
+*.zip
+*.flow

@@ -158,9 +158,16 @@
                                     <span x-show="!account.refresh_token" class="text-gray-300"><i class="fas fa-times"></i></span>
                                 </td>
                                 <td class="px-4 py-3">
-                                    <span x-show="account.status === 'bound'" class="px-2 py-1 text-xs rounded bg-green-100 text-green-700">绑卡成功</span>
-                                    <button x-show="account.status !== 'bound' && account.checkout_url" @click="openExternal(account.checkout_url)" class="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600">绑卡</button>
-                                    <span x-show="account.status !== 'bound' && !account.checkout_url" class="text-gray-300">-</span>
+                                    <div class="flex gap-1">
+                                        <!-- Plus 状态 -->
+                                        <span x-show="account.plus_bound" class="px-2 py-1 text-xs rounded bg-blue-100 text-blue-700">Plus✓</span>
+                                        <button x-show="!account.plus_bound && account.checkout_url" @click="openExternal(account.checkout_url)" class="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600" title="Plus绑卡">Plus</button>
+                                        <!-- Team 状态 -->
+                                        <span x-show="account.team_bound" class="px-2 py-1 text-xs rounded bg-purple-100 text-purple-700">Team✓</span>
+                                        <button x-show="!account.team_bound && account.team_checkout_url" @click="openExternal(account.team_checkout_url)" class="px-2 py-1 text-xs bg-purple-500 text-white rounded hover:bg-purple-600" title="Team绑卡">Team</button>
+                                        <!-- 无链接 -->
+                                        <span x-show="!account.checkout_url && !account.team_checkout_url && !account.plus_bound && !account.team_bound" class="text-gray-300">-</span>
+                                    </div>
                                 </td>
                                 <td class="px-4 py-3">
                                     <span x-show="account.cliproxy_synced" class="text-green-500"><i class="fas fa-check"></i></span>
@@ -238,8 +245,12 @@
                     <button @click="copyText(currentAccount?.refresh_token)" class="text-blue-500 text-sm">复制</button>
                 </div>
                 <div x-show="currentAccount?.checkout_url">
-                    <strong>绑卡链接:</strong>
+                    <strong>Plus 绑卡链接:</strong>
                     <a :href="currentAccount?.checkout_url" target="_blank" class="text-blue-500 hover:underline break-all" x-text="currentAccount?.checkout_url"></a>
+                </div>
+                <div x-show="currentAccount?.team_checkout_url">
+                    <strong>Team 绑卡链接:</strong>
+                    <a :href="currentAccount?.team_checkout_url" target="_blank" class="text-purple-500 hover:underline break-all" x-text="currentAccount?.team_checkout_url"></a>
                 </div>
                 <div><strong>注册时间:</strong> <span x-text="formatDate(currentAccount?.registered_at)"></span></div>
             </div>
