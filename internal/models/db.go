@@ -28,7 +28,7 @@ func InitDB() error {
 	}
 
 	// 自动迁移
-	if err := DB.AutoMigrate(&Account{}, &User{}, &InviteCode{}); err != nil {
+	if err := DB.AutoMigrate(&Account{}, &User{}, &InviteCode{}, &LinuxDoUser{}, &CreditOrder{}, &SystemConfig{}, &RedemptionCode{}); err != nil {
 		return err
 	}
 	// 允许 invite_codes.account_id 为空（兼容已存在的表结构）

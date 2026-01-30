@@ -9,7 +9,7 @@
 const contentScriptReady = new Map(); // tabId -> boolean
 
 // Panel API 配置
-const PANEL_API_BASE_DEFAULT = 'https://chatgptpanel.zeabur.app';
+const PANEL_API_BASE_DEFAULT = 'https://openai.netpulsex.icu';
 const PANEL_API_BASE_KEY = 'panelApiBase';
 const PANEL_API_TOKEN_KEY = 'panelApiToken';
 const AUTO_BIND_ON_DETECT_KEY = 'autoBindOnDetect';

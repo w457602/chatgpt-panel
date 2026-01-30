@@ -78,6 +78,8 @@
             <div class="bg-white rounded-lg shadow p-4 mb-6 flex flex-wrap items-center gap-3">
                 <button @click="openImportModal" class="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600">导入账号</button>
                 <button @click="openInviteModal" class="bg-sky-500 text-white px-3 py-1 rounded hover:bg-sky-600">邀请码管理</button>
+                <button @click="openRedemptionModal" class="bg-orange-500 text-white px-3 py-1 rounded hover:bg-orange-600">兑换码管理</button>
+                <button @click="openSystemConfigModal" class="bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600">系统设置</button>
                 <a href="/join" target="_blank" class="bg-gray-200 text-gray-700 px-3 py-1 rounded hover:bg-gray-300">自动加入页</a>
             </div>
 
@@ -124,6 +126,7 @@
                             <th class="px-4 py-3 text-left">邮箱</th>
                             <th class="px-4 py-3 text-left">订阅状态</th>
                             <th class="px-4 py-3 text-left">封禁</th>
+                            <th class="px-4 py-3 text-left">降级</th>
                             <th class="px-4 py-3 text-left">RT</th>
                             <th class="px-4 py-3 text-left">绑卡链接</th>
                             <th class="px-4 py-3 text-left">已同步</th>
@@ -145,6 +148,10 @@
                                 <td class="px-4 py-3">
                                     <span x-show="account.status === 'banned'" class="text-red-500"><i class="fas fa-ban"></i></span>
                                     <span x-show="account.status !== 'banned'" class="text-gray-300"><i class="fas fa-minus"></i></span>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <span x-show="account.is_demoted" class="text-orange-500" :title="`降级时间: ${formatDate(account.demoted_at)}`"><i class="fas fa-arrow-down"></i></span>
+                                    <span x-show="!account.is_demoted" class="text-gray-300"><i class="fas fa-minus"></i></span>
                                 </td>
                                 <td class="px-4 py-3">
                                     <span x-show="account.refresh_token" class="text-green-500"><i class="fas fa-check"></i></span>
@@ -214,6 +221,10 @@
                 <div><strong>账号状态:</strong> <span x-text="statusText(currentAccount?.status)"></span></div>
                 <div><strong>订阅状态:</strong> <span x-text="subscriptionText(currentAccount?.subscription_status)"></span></div>
                 <div><strong>是否封禁:</strong> <span x-text="currentAccount?.status === 'banned' ? '是' : '否'"></span></div>
+                <div><strong>是否降级:</strong>
+                    <span x-text="currentAccount?.is_demoted ? '是' : '否'" :class="currentAccount?.is_demoted ? 'text-orange-600' : ''"></span>
+                    <span x-show="currentAccount?.is_demoted && currentAccount?.demoted_at" class="text-sm text-gray-500" x-text="' (降级时间: ' + formatDate(currentAccount?.demoted_at) + ')'"></span>
+                </div>
                 <div><strong>已同步到 CLIProxyAPI:</strong> <span x-text="currentAccount?.cliproxy_synced ? '是' : '否'"></span></div>
                 <div><strong>Account ID:</strong> <span x-text="currentAccount?.account_id || '-'"></span></div>
                 <div x-show="currentAccount?.access_token">
@@ -343,6 +354,110 @@
         </div>
     </div>
 
+    <!-- 系统配置模态框 -->
+    <div x-show="showSystemConfigModal" x-cloak class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click.self="showSystemConfigModal=false">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[80vh] overflow-auto">
+            <div class="p-4 border-b flex justify-between items-center">
+                <h3 class="text-lg font-bold">系统设置</h3>
+                <button @click="showSystemConfigModal=false" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+            </div>
+            <div class="p-6 space-y-8">
+                <!-- Linux DO OAuth 配置 -->
+                <div class="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                    <h4 class="text-md font-semibold mb-4 text-gray-800">Linux DO OAuth 配置</h4>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Client ID</label>
+                            <input type="text" x-model="systemConfig.linuxdo_oauth.client_id"
+                                   :placeholder="systemConfig.linuxdo_oauth.client_id_stored ? '已保存（不修改请留空）' : '请输入 Client ID'"
+                                   class="w-full border rounded px-3 py-2">
+                            <p x-show="systemConfig.linuxdo_oauth.client_id_stored" class="text-xs text-green-600 mt-1">
+                                ✓ 已在数据库中保存
+                            </p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Client Secret</label>
+                            <div class="relative">
+                                <input :type="systemConfig.linuxdo_oauth.show_secret ? 'text' : 'password'"
+                                       x-model="systemConfig.linuxdo_oauth.client_secret"
+                                       :placeholder="systemConfig.linuxdo_oauth.secret_stored ? '已保存（不修改请留空）' : '请输入 Client Secret'"
+                                       class="w-full border rounded px-3 py-2 pr-10">
+                                <button @click="systemConfig.linuxdo_oauth.show_secret = !systemConfig.linuxdo_oauth.show_secret"
+                                        class="absolute right-2 top-2 text-gray-500 hover:text-gray-700"
+                                        type="button">
+                                    <i :class="systemConfig.linuxdo_oauth.show_secret ? 'fas fa-eye-slash' : 'fas fa-eye'"></i>
+                                </button>
+                            </div>
+                            <p x-show="systemConfig.linuxdo_oauth.secret_stored" class="text-xs text-green-600 mt-1">
+                                ✓ 已在数据库中保存
+                            </p>
+                        </div>
+                        <button @click="saveLinuxDoOAuthConfig"
+                                class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                :disabled="systemConfig.saving">
+                            <span x-show="!systemConfig.saving">保存 OAuth 配置</span>
+                            <span x-show="systemConfig.saving"><i class="fas fa-spinner fa-spin"></i> 保存中...</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Linux DO Credit 配置 -->
+                <div class="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                    <h4 class="text-md font-semibold mb-4 text-gray-800">Linux DO Credit 支付配置</h4>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">商户 PID</label>
+                            <input type="text" x-model="systemConfig.linuxdo_credit.pid"
+                                   :placeholder="systemConfig.linuxdo_credit.pid_stored ? '已保存（不修改请留空）' : '请输入 PID'"
+                                   class="w-full border rounded px-3 py-2">
+                            <p x-show="systemConfig.linuxdo_credit.pid_stored" class="text-xs text-green-600 mt-1">
+                                ✓ 已在数据库中保存
+                            </p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">支付密钥 (KEY)</label>
+                            <div class="relative">
+                                <input :type="systemConfig.linuxdo_credit.show_key ? 'text' : 'password'"
+                                       x-model="systemConfig.linuxdo_credit.key"
+                                       :placeholder="systemConfig.linuxdo_credit.key_stored ? '已保存（不修改请留空）' : '请输入 KEY'"
+                                       class="w-full border rounded px-3 py-2 pr-10">
+                                <button @click="systemConfig.linuxdo_credit.show_key = !systemConfig.linuxdo_credit.show_key"
+                                        class="absolute right-2 top-2 text-gray-500 hover:text-gray-700"
+                                        type="button">
+                                    <i :class="systemConfig.linuxdo_credit.show_key ? 'fas fa-eye-slash' : 'fas fa-eye'"></i>
+                                </button>
+                            </div>
+                            <p x-show="systemConfig.linuxdo_credit.key_stored" class="text-xs text-green-600 mt-1">
+                                ✓ 已在数据库中保存
+                            </p>
+                        </div>
+                        <button @click="saveLinuxDoCreditConfig"
+                                class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+                                :disabled="systemConfig.saving">
+                            <span x-show="!systemConfig.saving">保存 Credit 配置</span>
+                            <span x-show="systemConfig.saving"><i class="fas fa-spinner fa-spin"></i> 保存中...</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 保存反馈消息 -->
+                <div x-show="systemConfig.message" class="p-3 rounded"
+                     :class="systemConfig.success ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'">
+                    <p x-text="systemConfig.message"></p>
+                </div>
+
+                <div class="text-sm text-gray-500 border-t pt-4 mt-4">
+                    <p><strong>提示：</strong></p>
+                    <ul class="list-disc pl-5 space-y-1 mt-2">
+                        <li>数据库配置优先级高于环境变量</li>
+                        <li>留空表示不修改当前配置</li>
+                        <li>敏感字段（Secret、KEY）不显示完整内容，仅提示是否已保存</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- OAuth 授权模态框 -->
     <div x-show="showOAuthModal" x-cloak class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click.self="showOAuthModal=false">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-xl">
@@ -400,6 +515,123 @@
         </div>
     </div>
 
+    <!-- 兑换码管理弹窗 -->
+    <div x-show="showRedemptionModal" x-cloak class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click.self="showRedemptionModal=false">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] overflow-auto">
+            <div class="p-4 border-b flex justify-between items-center">
+                <h3 class="text-lg font-bold">兑换码管理</h3>
+                <button @click="showRedemptionModal=false" class="text-gray-500 hover:text-gray-700 text-2xl">&times;</button>
+            </div>
+            <div class="p-4 space-y-6">
+                <!-- 批量创建表单 -->
+                <div class="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    <h4 class="font-semibold mb-3 text-gray-800">批量创建兑换码</h4>
+                    <div class="grid grid-cols-1 md:grid-cols-5 gap-3">
+                        <input type="number" min="1" max="100" x-model="redemptionForm.count" placeholder="数量 (1-100)" class="border rounded px-3 py-2">
+                        <select x-model="redemptionForm.channel" class="border rounded px-3 py-2">
+                            <option value="common">通用</option>
+                            <option value="linux-do">Linux DO</option>
+                            <option value="xhs">小红书</option>
+                            <option value="xianyu">闲鱼</option>
+                        </select>
+                        <select x-model="redemptionForm.order_type" class="border rounded px-3 py-2">
+                            <option value="warranty">质保订单</option>
+                            <option value="no-warranty">无质保订单</option>
+                        </select>
+                        <input type="number" x-model="redemptionForm.account_id" placeholder="绑定账号ID (可选)" class="border rounded px-3 py-2">
+                        <button @click="batchCreateRedemptionCodes" class="bg-orange-500 text-white px-3 py-2 rounded hover:bg-orange-600" :disabled="redemptionSaving">
+                            <span x-show="!redemptionSaving">创建兑换码</span>
+                            <span x-show="redemptionSaving"><i class="fas fa-spinner fa-spin"></i> 创建中...</span>
+                        </button>
+                    </div>
+
+                    <!-- 状态消息 -->
+                    <div x-show="redemptionMessage" :class="redemptionSuccess ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'" class="mt-3 p-3 rounded text-sm">
+                        <span x-text="redemptionMessage"></span>
+                    </div>
+                </div>
+
+                <!-- 筛选栏 -->
+                <div class="flex gap-2 items-center">
+                    <select x-model="redemptionFilter.channel" @change="loadRedemptionCodes" class="border rounded px-3 py-2">
+                        <option value="">全部渠道</option>
+                        <option value="common">通用</option>
+                        <option value="linux-do">Linux DO</option>
+                        <option value="xhs">小红书</option>
+                        <option value="xianyu">闲鱼</option>
+                    </select>
+                    <select x-model="redemptionFilter.is_redeemed" @change="loadRedemptionCodes" class="border rounded px-3 py-2">
+                        <option value="">全部状态</option>
+                        <option value="false">未兑换</option>
+                        <option value="true">已兑换</option>
+                    </select>
+                    <button @click="loadRedemptionCodes" class="text-sm text-blue-600 hover:text-blue-800 ml-auto">刷新</button>
+                </div>
+
+                <!-- 兑换码列表 -->
+                <div class="border rounded overflow-hidden">
+                    <table class="w-full">
+                        <thead class="bg-gray-100">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-700">ID</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-700">兑换码</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-700">渠道</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-700">订单类型</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-700">状态</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-700">兑换者</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-700">账号邮箱</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-700">兑换时间</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-700">创建时间</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold text-gray-700">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="code in redemptionCodes" :key="code.id">
+                                <tr class="border-t hover:bg-gray-50">
+                                    <td class="px-3 py-2 text-sm" x-text="code.id"></td>
+                                    <td class="px-3 py-2 text-sm">
+                                        <button class="text-blue-600 hover:text-blue-800 font-mono" @click="copyText(code.code)" x-text="code.code"></button>
+                                    </td>
+                                    <td class="px-3 py-2 text-sm" x-text="code.channel_name || code.channel"></td>
+                                    <td class="px-3 py-2 text-sm">
+                                        <span x-text="code.order_type === 'warranty' ? '质保' : '无质保'" :class="code.order_type === 'warranty' ? 'text-green-600' : 'text-orange-600'"></span>
+                                    </td>
+                                    <td class="px-3 py-2 text-sm">
+                                        <span x-show="code.is_redeemed" class="text-green-600"><i class="fas fa-check-circle"></i> 已兑换</span>
+                                        <span x-show="!code.is_redeemed" class="text-gray-500"><i class="far fa-circle"></i> 未兑换</span>
+                                    </td>
+                                    <td class="px-3 py-2 text-sm text-gray-600" x-text="code.redeemed_by || '-'"></td>
+                                    <td class="px-3 py-2 text-sm text-gray-600" x-text="code.account_email || '-'"></td>
+                                    <td class="px-3 py-2 text-sm text-gray-500" x-text="code.redeemed_at ? formatDate(code.redeemed_at) : '-'"></td>
+                                    <td class="px-3 py-2 text-sm text-gray-500" x-text="formatDate(code.created_at)"></td>
+                                    <td class="px-3 py-2">
+                                        <button @click="deleteRedemptionCode(code.id)" class="text-red-500 hover:text-red-700" title="删除">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            </template>
+                            <tr x-show="redemptionCodes.length === 0">
+                                <td colspan="10" class="px-3 py-6 text-center text-gray-500">暂无兑换码</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 分页 -->
+                <div class="flex justify-between items-center">
+                    <div class="text-sm text-gray-600">
+                        共 <span x-text="redemptionPagination.total"></span> 条，第 <span x-text="redemptionPagination.page"></span>/<span x-text="redemptionPagination.total_pages"></span> 页
+                    </div>
+                    <div class="flex gap-2">
+                        <button @click="prevRedemptionPage" :disabled="redemptionPagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-50">上一页</button>
+                        <button @click="nextRedemptionPage" :disabled="redemptionPagination.page >= redemptionPagination.total_pages" class="px-3 py-1 border rounded disabled:opacity-50">下一页</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>
         function app() {
             return {
@@ -439,6 +671,49 @@
                 inviteMessage: '',
                 inviteSuccess: false,
                 inviteForm: { code: '', max_uses: '', expires_at: '', disabled: false },
+                showSystemConfigModal: false,
+                systemConfig: {
+                    linuxdo_oauth: {
+                        client_id: '',
+                        client_secret: '',
+                        client_id_stored: false,
+                        secret_stored: false,
+                        show_secret: false
+                    },
+                    linuxdo_credit: {
+                        pid: '',
+                        key: '',
+                        pid_stored: false,
+                        key_stored: false,
+                        show_key: false
+                    },
+                    saving: false,
+                    message: '',
+                    success: false
+                },
+                showRedemptionModal: false,
+                redemptionCodes: [],
+                redemptionSaving: false,
+                redemptionMessage: '',
+                redemptionSuccess: false,
+                redemptionForm: {
+                    count: 10,
+                    channel: 'common',
+                    order_type: 'warranty',
+                    account_id: null
+                },
+                redemptionFilter: {
+                    channel: '',
+                    is_redeemed: '',
+                    page: 1,
+                    page_size: 20
+                },
+                redemptionPagination: {
+                    total: 0,
+                    page: 1,
+                    page_size: 20,
+                    total_pages: 0
+                },
 
                 async init() {
                     if (this.token) {
@@ -639,6 +914,217 @@
                         await this.loadInviteCodes();
                     } finally {
                         this.inviteSaving = false;
+                    }
+                },
+
+                // 系统配置管理
+                async openSystemConfigModal() {
+                    this.showSystemConfigModal = true;
+                    this.systemConfig.message = '';
+                    this.systemConfig.success = false;
+                    await this.loadSystemConfig();
+                },
+
+                async loadSystemConfig() {
+                    try {
+                        const [oauthRes, creditRes] = await Promise.all([
+                            this.api('/api/v1/admin/config/linuxdo-oauth'),
+                            this.api('/api/v1/admin/config/linuxdo-credit')
+                        ]);
+
+                        if (oauthRes?.success) {
+                            this.systemConfig.linuxdo_oauth = {
+                                ...this.systemConfig.linuxdo_oauth,
+                                client_id: oauthRes.data.client_id || '',
+                                client_id_stored: oauthRes.data.client_id_stored || false,
+                                secret_stored: oauthRes.data.secret_stored || false,
+                                client_secret: ''
+                            };
+                        }
+
+                        if (creditRes?.success) {
+                            this.systemConfig.linuxdo_credit = {
+                                ...this.systemConfig.linuxdo_credit,
+                                pid: creditRes.data.pid || '',
+                                pid_stored: creditRes.data.pid_stored || false,
+                                key_stored: creditRes.data.key_stored || false,
+                                key: ''
+                            };
+                        }
+                    } catch (e) {
+                        console.error('Load system config failed:', e);
+                    }
+                },
+
+                async saveLinuxDoOAuthConfig() {
+                    this.systemConfig.saving = true;
+                    this.systemConfig.message = '';
+                    try {
+                        const payload = {};
+                        if (this.systemConfig.linuxdo_oauth.client_id) {
+                            payload.client_id = this.systemConfig.linuxdo_oauth.client_id.trim();
+                        }
+                        if (this.systemConfig.linuxdo_oauth.client_secret) {
+                            payload.client_secret = this.systemConfig.linuxdo_oauth.client_secret.trim();
+                        }
+
+                        const res = await this.api('/api/v1/admin/config/linuxdo-oauth', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (res?.success) {
+                            this.systemConfig.message = 'Linux DO OAuth 配置保存成功';
+                            this.systemConfig.success = true;
+                            this.systemConfig.linuxdo_oauth.client_secret = '';
+                            await this.loadSystemConfig();
+                        } else {
+                            this.systemConfig.message = res?.message || '保存失败';
+                            this.systemConfig.success = false;
+                        }
+                    } catch (e) {
+                        this.systemConfig.message = '保存失败: ' + e.message;
+                        this.systemConfig.success = false;
+                    } finally {
+                        this.systemConfig.saving = false;
+                    }
+                },
+
+                async saveLinuxDoCreditConfig() {
+                    this.systemConfig.saving = true;
+                    this.systemConfig.message = '';
+                    try {
+                        const payload = {};
+                        if (this.systemConfig.linuxdo_credit.pid) {
+                            payload.pid = this.systemConfig.linuxdo_credit.pid.trim();
+                        }
+                        if (this.systemConfig.linuxdo_credit.key) {
+                            payload.key = this.systemConfig.linuxdo_credit.key.trim();
+                        }
+
+                        const res = await this.api('/api/v1/admin/config/linuxdo-credit', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (res?.success) {
+                            this.systemConfig.message = 'Linux DO Credit 配置保存成功';
+                            this.systemConfig.success = true;
+                            this.systemConfig.linuxdo_credit.key = '';
+                            await this.loadSystemConfig();
+                        } else {
+                            this.systemConfig.message = res?.message || '保存失败';
+                            this.systemConfig.success = false;
+                        }
+                    } catch (e) {
+                        this.systemConfig.message = '保存失败: ' + e.message;
+                        this.systemConfig.success = false;
+                    } finally {
+                        this.systemConfig.saving = false;
+                    }
+                },
+
+                // 兑换码管理
+                async openRedemptionModal() {
+                    this.showRedemptionModal = true;
+                    this.redemptionMessage = '';
+                    this.redemptionSuccess = false;
+                    this.redemptionFilter.page = 1;
+                    await this.loadRedemptionCodes();
+                },
+
+                async loadRedemptionCodes() {
+                    const params = new URLSearchParams({
+                        page: this.redemptionFilter.page,
+                        page_size: this.redemptionFilter.page_size
+                    });
+                    if (this.redemptionFilter.channel) {
+                        params.append('channel', this.redemptionFilter.channel);
+                    }
+                    if (this.redemptionFilter.is_redeemed) {
+                        params.append('is_redeemed', this.redemptionFilter.is_redeemed);
+                    }
+
+                    const res = await this.api(`/api/v1/redemption-codes?${params}`);
+                    if (res) {
+                        this.redemptionCodes = res.data || [];
+                        this.redemptionPagination = {
+                            total: res.total || 0,
+                            page: res.page || 1,
+                            page_size: res.page_size || 20,
+                            total_pages: res.total_pages || 0
+                        };
+                    }
+                },
+
+                async batchCreateRedemptionCodes() {
+                    if (!this.redemptionForm.count || this.redemptionForm.count < 1 || this.redemptionForm.count > 100) {
+                        this.redemptionMessage = '数量必须在 1-100 之间';
+                        this.redemptionSuccess = false;
+                        return;
+                    }
+
+                    this.redemptionSaving = true;
+                    this.redemptionMessage = '';
+
+                    try {
+                        const payload = {
+                            count: parseInt(this.redemptionForm.count),
+                            channel: this.redemptionForm.channel,
+                            order_type: this.redemptionForm.order_type
+                        };
+                        if (this.redemptionForm.account_id) {
+                            payload.account_id = parseInt(this.redemptionForm.account_id);
+                        }
+
+                        const res = await this.api('/api/v1/redemption-codes/batch', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (!res) return;
+
+                        if (res.error) {
+                            this.redemptionMessage = res.error;
+                            this.redemptionSuccess = false;
+                            return;
+                        }
+
+                        this.redemptionMessage = `${res.message || '创建成功'}，共创建 ${res.count || 0} 个兑换码`;
+                        this.redemptionSuccess = true;
+                        this.redemptionForm.count = 10;
+                        await this.loadRedemptionCodes();
+                    } finally {
+                        this.redemptionSaving = false;
+                    }
+                },
+
+                async deleteRedemptionCode(id) {
+                    if (!confirm('确定要删除这个兑换码吗？')) return;
+
+                    const res = await this.api(`/api/v1/redemption-codes/${id}`, {
+                        method: 'DELETE'
+                    });
+
+                    if (res?.message) {
+                        await this.loadRedemptionCodes();
+                    }
+                },
+
+                async prevRedemptionPage() {
+                    if (this.redemptionFilter.page > 1) {
+                        this.redemptionFilter.page--;
+                        await this.loadRedemptionCodes();
+                    }
+                },
+
+                async nextRedemptionPage() {
+                    if (this.redemptionFilter.page < this.redemptionPagination.total_pages) {
+                        this.redemptionFilter.page++;
+                        await this.loadRedemptionCodes();
                     }
                 },
 

@@ -26,6 +26,8 @@ type Account struct {
 	Notes              string          `gorm:"type:text" json:"notes"`
 	RegisteredAt       time.Time       `gorm:"index" json:"registered_at"`
 	LastUsedAt         *time.Time      `json:"last_used_at"`
+	IsDemoted          bool            `gorm:"default:false" json:"is_demoted"` // 账号是否已降级
+	DemotedAt          *time.Time      `json:"demoted_at"`                      // 降级时间
 	CreatedAt          time.Time       `json:"created_at"`
 	UpdatedAt          time.Time       `json:"updated_at"`
 	DeletedAt          gorm.DeletedAt  `gorm:"index" json:"-"`

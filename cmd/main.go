@@ -43,6 +43,10 @@ func main() {
 	r.GET("/join", func(c *gin.Context) {
 		c.HTML(200, "join.html", nil)
 	})
+	// 兑换页面
+	r.GET("/redeem", func(c *gin.Context) {
+		c.HTML(200, "redeem.html", nil)
+	})
 
 	// 初始化处理器
 	authHandler := handlers.NewAuthHandler()
@@ -50,6 +54,10 @@ func main() {
 	oauthHandler := handlers.NewOAuthHandler()
 	extensionHandler := handlers.NewExtensionHandler()
 	inviteHandler := handlers.NewInviteHandler()
+	linuxDoHandler := handlers.NewLinuxDoHandler()
+	systemConfigHandler := handlers.NewSystemConfigHandler()
+	redemptionHandler := handlers.NewRedemptionHandler(models.GetDB())
+	bannedDomainsHandler := handlers.NewBannedDomainsHandler()
 
 	// 启动 Codex OAuth 回调服务
 	if err := services.GetCodexOAuthService().EnsureCallbackServer(); err != nil {
@@ -66,6 +74,20 @@ func main() {
 		api.POST("/accounts/import", accountHandler.Import)
 		// 自动加入（无需登录）
 		api.POST("/invite/join", inviteHandler.JoinByInviteCode)
+
+		// Linux DO OAuth（无需登录）
+		api.GET("/linuxdo/authorize-url", linuxDoHandler.GetAuthorizeURL)
+		api.POST("/linuxdo/exchange", linuxDoHandler.ExchangeCode)
+
+		// Linux DO Credit 回调（无需登录）
+		api.GET("/linuxdo/credit/notify", linuxDoHandler.CreditNotify)
+
+		// 兑换码兑换（公开接口）
+		api.POST("/redemption/redeem", redemptionHandler.Redeem)
+
+		// 禁用域名列表（公开接口，供注册脚本使用）
+		api.GET("/banned-domains", bannedDomainsHandler.List)
+		api.GET("/banned-domains/raw", bannedDomainsHandler.GetRaw)
 
 		// 扩展接口（用于浏览器插件）
 		extension := api.Group("/extension")
@@ -109,6 +131,33 @@ func main() {
 			auth.POST("/oauth/codex/start", oauthHandler.StartCodex)
 			auth.GET("/oauth/codex/status/:state", oauthHandler.GetStatus)
 			auth.POST("/oauth/codex/callback", oauthHandler.SubmitCallback)
+
+			// Linux DO 用户信息（需要 LinuxDo Session Token）
+			auth.GET("/linuxdo/me", linuxDoHandler.GetUserInfo)
+			auth.PUT("/linuxdo/me/email", linuxDoHandler.UpdateEmail)
+
+			// Linux DO Credit 订单管理
+			auth.POST("/linuxdo/credit/orders", linuxDoHandler.CreateCreditOrder)
+			auth.GET("/linuxdo/credit/orders/:orderNo", linuxDoHandler.QueryCreditOrder)
+			auth.GET("/linuxdo/credit/orders", linuxDoHandler.ListCreditOrders)
+
+			// 系统配置管理（仅管理员可访问）
+			auth.GET("/admin/config/linuxdo-oauth", systemConfigHandler.GetLinuxDoOAuthConfig)
+			auth.PUT("/admin/config/linuxdo-oauth", systemConfigHandler.UpdateLinuxDoOAuthConfig)
+			auth.GET("/admin/config/linuxdo-credit", systemConfigHandler.GetLinuxDoCreditConfig)
+			auth.PUT("/admin/config/linuxdo-credit", systemConfigHandler.UpdateLinuxDoCreditConfig)
+			auth.GET("/admin/config/all", systemConfigHandler.GetAllConfigs)
+			auth.DELETE("/admin/config/:key", systemConfigHandler.DeleteConfig)
+
+			// 兑换码管理（需要认证）
+			auth.GET("/redemption-codes", redemptionHandler.List)
+			auth.GET("/redemption-codes/:id", redemptionHandler.Get)
+			auth.POST("/redemption-codes/batch", redemptionHandler.BatchCreate)
+			auth.POST("/redemption-codes/admin-redeem", redemptionHandler.AdminRedeem)
+			auth.DELETE("/redemption-codes/:id", redemptionHandler.Delete)
+
+			// 禁用域名管理（需要认证）
+			auth.POST("/banned-domains", bannedDomainsHandler.Append)
 		}
 	}
 

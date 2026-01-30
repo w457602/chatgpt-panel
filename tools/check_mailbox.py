@@ -107,6 +107,8 @@ def http_json(opener, url, method="GET", headers=None, payload=None, timeout=20)
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, method=method)
+    # 添加默认 User-Agent 避免被 Cloudflare 拦截
+    req.add_header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
     if headers:
         for k, v in headers.items():
             req.add_header(k, v)
@@ -241,7 +243,7 @@ def main():
     parser.add_argument("--ban-domain-file", default="banned_email_domains.txt", help="append banned domains to file")
     parser.add_argument("--no-update-panel", action="store_true", help="do not update panel status")
     parser.add_argument("--no-delete-panel", action="store_true", help="(alias) do not update panel status")
-    parser.add_argument("--panel-base", default=os.getenv("PANEL_BASE", "https://chatgptpanel.zeabur.app"))
+    parser.add_argument("--panel-base", default=os.getenv("PANEL_BASE", "https://openai.netpulsex.icu"))
     parser.add_argument("--panel-username", default=os.getenv("PANEL_USERNAME", "admin"))
     parser.add_argument("--panel-password", default=os.getenv("PANEL_PASSWORD", "admin123"))
     parser.add_argument("--panel-page-size", type=int, default=100, help="panel page size")
@@ -273,6 +275,10 @@ def main():
         for item in accounts:
             email = (item.get("email") or "").strip()
             if not email:
+                continue
+            # 跳过已标记为 banned 状态的账号
+            status = (item.get("status") or "").lower()
+            if status == "banned":
                 continue
             key = email.lower()
             panel_email_to_ids.setdefault(key, []).append(int(item.get("id")))
