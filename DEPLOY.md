@@ -234,3 +234,145 @@ COPY import_lines FROM '/tmp/chatgpt_accounts_api.ndjson';
 ```
 
 Keep passwords as a placeholder (e.g. `imported`) to satisfy NOT NULL.
+
+---
+
+## Azure Korea VM 部署（当前生产环境）
+
+### 服务器信息
+
+| 项目 | 值 |
+|------|-----|
+| 服务器 | Azure Korea VM |
+| IP | 20.194.5.107 |
+| 用户名 | amesky |
+| 密码 | Xiaowu131400.. |
+| 域名 | https://openai.netpulsex.icu |
+| 服务端口 | 9531 |
+
+### 数据库配置
+
+```
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=amesky
+DB_PASSWORD=chatgpt_panel_pass
+DB_NAME=chatgpt_panel
+DB_SSLMODE=disable
+```
+
+### 服务配置文件
+
+`/etc/systemd/system/chatgpt-panel.service`:
+
+```ini
+[Unit]
+Description=ChatGPT Panel
+After=network.target
+
+[Service]
+Type=simple
+User=amesky
+WorkingDirectory=/home/amesky/chatgpt-panel
+Environment="DB_HOST=localhost"
+Environment="DB_PORT=5432"
+Environment="DB_USER=amesky"
+Environment="DB_PASSWORD=chatgpt_panel_pass"
+Environment="DB_NAME=chatgpt_panel"
+Environment="DB_SSLMODE=disable"
+Environment="SERVER_PORT=9531"
+Environment="JWT_SECRET=azure-korea-jwt-secret-chatgpt-panel"
+Environment="GIN_MODE=release"
+Environment="BANNED_DOMAINS_FILE=/home/amesky/chatgpt-panel/tools/banned_email_domains.txt"
+ExecStart=/home/amesky/chatgpt-panel/chatgpt-panel
+Restart=always
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 快速更新部署命令
+
+**本地构建：**
+
+```bash
+cd /Users/amesky/Documents/github/chatgpt-panel
+GOOS=linux GOARCH=amd64 go build -o dist/chatgpt-panel ./cmd
+```
+
+**使用 sshpass 自动上传并部署（无需手动输入密码）：**
+
+```bash
+# 上传二进制文件
+sshpass -p 'Xiaowu131400..' scp -o StrictHostKeyChecking=no dist/chatgpt-panel amesky@20.194.5.107:/tmp/
+
+# 上传前端模板（如有修改）
+sshpass -p 'Xiaowu131400..' scp -o StrictHostKeyChecking=no templates/index.html amesky@20.194.5.107:/tmp/
+
+# 停止服务、替换文件、重启服务
+sshpass -p 'Xiaowu131400..' ssh -o StrictHostKeyChecking=no amesky@20.194.5.107 "sudo systemctl stop chatgpt-panel && cp /tmp/chatgpt-panel /home/amesky/chatgpt-panel/chatgpt-panel && cp /tmp/index.html /home/amesky/chatgpt-panel/templates/ && chmod +x /home/amesky/chatgpt-panel/chatgpt-panel && sudo systemctl start chatgpt-panel && sleep 2 && sudo systemctl status chatgpt-panel --no-pager"
+```
+
+**一键构建+部署脚本：**
+
+```bash
+#!/bin/bash
+set -e
+cd /Users/amesky/Documents/github/chatgpt-panel
+
+echo "🔨 构建中..."
+GOOS=linux GOARCH=amd64 go build -o dist/chatgpt-panel ./cmd
+
+echo "📤 上传文件..."
+sshpass -p 'Xiaowu131400..' scp -o StrictHostKeyChecking=no dist/chatgpt-panel amesky@20.194.5.107:/tmp/
+sshpass -p 'Xiaowu131400..' scp -o StrictHostKeyChecking=no templates/index.html amesky@20.194.5.107:/tmp/
+
+echo "🚀 部署中..."
+sshpass -p 'Xiaowu131400..' ssh -o StrictHostKeyChecking=no amesky@20.194.5.107 \
+  "sudo systemctl stop chatgpt-panel && \
+   cp /tmp/chatgpt-panel /home/amesky/chatgpt-panel/chatgpt-panel && \
+   cp /tmp/index.html /home/amesky/chatgpt-panel/templates/ && \
+   chmod +x /home/amesky/chatgpt-panel/chatgpt-panel && \
+   sudo systemctl start chatgpt-panel"
+
+echo "✅ 部署完成！"
+sshpass -p 'Xiaowu131400..' ssh -o StrictHostKeyChecking=no amesky@20.194.5.107 \
+  "sudo systemctl status chatgpt-panel --no-pager"
+```
+
+### 数据库操作
+
+**连接数据库：**
+
+```bash
+sshpass -p 'Xiaowu131400..' ssh -o StrictHostKeyChecking=no amesky@20.194.5.107 \
+  "PGPASSWORD=chatgpt_panel_pass psql -h localhost -U amesky -d chatgpt_panel"
+```
+
+**查询账号统计：**
+
+```bash
+sshpass -p 'Xiaowu131400..' ssh -o StrictHostKeyChecking=no amesky@20.194.5.107 \
+  "PGPASSWORD=chatgpt_panel_pass psql -h localhost -U amesky -d chatgpt_panel -c 'SELECT COUNT(*) FROM accounts;'"
+```
+
+**清理未绑卡账号：**
+
+```bash
+sshpass -p 'Xiaowu131400..' ssh -o StrictHostKeyChecking=no amesky@20.194.5.107 \
+  "PGPASSWORD=chatgpt_panel_pass psql -h localhost -U amesky -d chatgpt_panel -c \"DELETE FROM accounts WHERE plus_bound = false AND team_bound = false;\""
+```
+
+### 查看服务日志
+
+```bash
+sshpass -p 'Xiaowu131400..' ssh -o StrictHostKeyChecking=no amesky@20.194.5.107 \
+  "sudo journalctl -u chatgpt-panel -f"
+```
+
+### 安装 sshpass（macOS）
+
+```bash
+brew install hudochenkov/sshpass/sshpass
+```
