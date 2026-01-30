@@ -80,6 +80,10 @@
                 <button @click="openInviteModal" class="bg-sky-500 text-white px-3 py-1 rounded hover:bg-sky-600">邀请码管理</button>
                 <button @click="openRedemptionModal" class="bg-orange-500 text-white px-3 py-1 rounded hover:bg-orange-600">兑换码管理</button>
                 <button @click="openSystemConfigModal" class="bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600">系统设置</button>
+                <button @click="refreshAllSubscriptions" class="bg-yellow-500 text-white px-3 py-1 rounded hover:bg-yellow-600" :disabled="refreshingSubscriptions">
+                    <i class="fas" :class="refreshingSubscriptions ? 'fa-spinner fa-spin' : 'fa-crown'"></i>
+                    <span x-text="refreshingSubscriptions ? '刷新中...' : '刷新订阅状态'"></span>
+                </button>
                 <a href="/join" target="_blank" class="bg-gray-200 text-gray-700 px-3 py-1 rounded hover:bg-gray-300">自动加入页</a>
             </div>
 
@@ -143,7 +147,11 @@
                                     <span class="cursor-pointer" @click="copyText(account.email)" x-text="account.email"></span>
                                 </td>
                                 <td class="px-4 py-3">
-                                    <span class="px-2 py-1 rounded text-xs bg-gray-100 text-gray-800" x-text="subscriptionText(account.subscription_status)"></span>
+                                    <div class="flex gap-1">
+                                        <span x-show="account.is_plus" class="px-2 py-1 text-xs rounded bg-blue-100 text-blue-700">Plus</span>
+                                        <span x-show="account.is_team" class="px-2 py-1 text-xs rounded bg-purple-100 text-purple-700">Team</span>
+                                        <span x-show="!account.is_plus && !account.is_team" class="px-2 py-1 rounded text-xs bg-gray-100 text-gray-800" x-text="subscriptionText(account.subscription_status)"></span>
+                                    </div>
                                 </td>
                                 <td class="px-4 py-3">
                                     <span x-show="account.status === 'banned'" class="text-red-500"><i class="fas fa-ban"></i></span>
@@ -725,6 +733,7 @@
                     page_size: 20,
                     total_pages: 0
                 },
+                refreshingSubscriptions: false,
 
                 async init() {
                     if (this.token) {
@@ -1304,6 +1313,24 @@
                         }
                     } catch (e) {
                         alert('刷新失败: ' + e.message);
+                    }
+                },
+
+                async refreshAllSubscriptions() {
+                    if (this.refreshingSubscriptions) return;
+                    this.refreshingSubscriptions = true;
+                    try {
+                        const res = await this.api('/api/v1/accounts/refresh-all-subscriptions', { method: 'POST' });
+                        if (res?.message) {
+                            alert(`${res.message}\n总计: ${res.total}, 更新: ${res.updated}\nPlus: ${res.plus_count}, Team: ${res.team_count}`);
+                            this.loadAccounts();
+                        } else if (res?.error) {
+                            alert('刷新失败: ' + res.error);
+                        }
+                    } catch (e) {
+                        alert('刷新失败: ' + e.message);
+                    } finally {
+                        this.refreshingSubscriptions = false;
                     }
                 },
 

@@ -891,3 +891,62 @@ func (h *AccountHandler) RefreshSubscriptionStatus(c *gin.Context) {
 		"changed":             plan != oldStatus,
 	})
 }
+
+// RefreshAllSubscriptions 批量刷新所有账号的订阅状态
+func (h *AccountHandler) RefreshAllSubscriptions(c *gin.Context) {
+	// 获取所有有 access_token 的账号
+	accounts, err := h.accountService.GetAllWithAccessToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	updated := 0
+	plusCount := 0
+	teamCount := 0
+
+	for _, account := range accounts {
+		if account.AccessToken == "" {
+			continue
+		}
+
+		// 提取订阅状态
+		flags := services.ExtractSubscriptionFlags(account.AccessToken)
+		plan := services.ExtractSubscriptionStatusFromToken(account.AccessToken)
+
+		changed := false
+		if account.IsPlus != flags.IsPlus {
+			account.IsPlus = flags.IsPlus
+			changed = true
+		}
+		if account.IsTeam != flags.IsTeam {
+			account.IsTeam = flags.IsTeam
+			changed = true
+		}
+		if plan != "" && plan != account.SubscriptionStatus {
+			account.SubscriptionStatus = plan
+			changed = true
+		}
+
+		if changed {
+			if err := h.accountService.Update(account); err == nil {
+				updated++
+			}
+		}
+
+		if flags.IsPlus {
+			plusCount++
+		}
+		if flags.IsTeam {
+			teamCount++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":     "批量刷新完成",
+		"total":       len(accounts),
+		"updated":     updated,
+		"plus_count":  plusCount,
+		"team_count":  teamCount,
+	})
+}

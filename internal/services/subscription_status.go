@@ -72,3 +72,18 @@ func IsCliproxyEligibleSubscription(status string) bool {
 		return false
 	}
 }
+
+// SubscriptionFlags 订阅状态标志
+type SubscriptionFlags struct {
+	IsPlus bool
+	IsTeam bool
+}
+
+// ExtractSubscriptionFlags 从 access_token 中提取订阅状态标志
+func ExtractSubscriptionFlags(token string) SubscriptionFlags {
+	plan := ExtractSubscriptionStatusFromToken(token)
+	return SubscriptionFlags{
+		IsPlus: plan == subscriptionPlus,
+		IsTeam: plan == subscriptionTeam || plan == subscriptionBusiness,
+	}
+}

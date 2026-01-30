@@ -122,6 +122,7 @@ func main() {
 			// 账号测试
 			auth.POST("/accounts/:id/refresh", accountHandler.RefreshAccountToken)
 			auth.POST("/accounts/:id/refresh-subscription", accountHandler.RefreshSubscriptionStatus)
+			auth.POST("/accounts/refresh-all-subscriptions", accountHandler.RefreshAllSubscriptions)
 
 			// 邀请码管理
 			auth.GET("/invite-codes", inviteHandler.ListInviteCodes)

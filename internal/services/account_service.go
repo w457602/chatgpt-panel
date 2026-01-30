@@ -325,3 +325,10 @@ func (s *AccountService) GetStats() (*models.AccountStats, error) {
 
 	return stats, nil
 }
+
+// GetAllWithAccessToken 获取所有有 access_token 的账号
+func (s *AccountService) GetAllWithAccessToken() ([]*models.Account, error) {
+	var accounts []*models.Account
+	err := s.db.Where("access_token IS NOT NULL AND access_token != ''").Find(&accounts).Error
+	return accounts, err
+}

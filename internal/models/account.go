@@ -18,6 +18,8 @@ type Account struct {
 	TeamCheckoutURL    string          `gorm:"size:1000" json:"team_checkout_url"`
 	PlusBound          bool            `gorm:"default:false" json:"plus_bound"`  // Plus绑卡是否成功
 	TeamBound          bool            `gorm:"default:false" json:"team_bound"`  // Team绑卡是否成功
+	IsPlus             bool            `gorm:"default:false" json:"is_plus"`     // 是否有Plus订阅
+	IsTeam             bool            `gorm:"default:false" json:"is_team"`     // 是否有Team订阅
 	AccountID          string          `gorm:"index;size:100" json:"account_id"`
 	SubscriptionStatus string          `gorm:"index;size:50" json:"subscription_status"`
 	TokenExpired       *time.Time      `json:"token_expired"`
