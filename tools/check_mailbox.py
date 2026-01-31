@@ -15,6 +15,35 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 API_BASE = "https://mail.chatgpt.org.uk/api/emails"
 DEACTIVATED_SUBJECT = "OpenAI - Access Deactivated"
 
+# Bark 通知配置
+BARK_ENABLED = True
+BARK_URL = "https://api.day.app/sJdCVyNSgBrkoXrrFA3pTD"
+BARK_TITLE = "邮箱封禁检测"
+
+
+def send_bark_message(text: str, title: str = None) -> bool:
+    """发送 Bark 通知消息"""
+    if not BARK_ENABLED:
+        return False
+    if not BARK_URL:
+        print("⚠️ Bark 未配置，跳过通知")
+        return False
+    try:
+        url = BARK_URL.rstrip("/")
+        params = urllib.parse.urlencode({
+            "title": title or BARK_TITLE,
+            "body": text
+        })
+        req = urllib.request.Request(f"{url}?{params}")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 200:
+                print("📨 Bark 通知已发送")
+                return True
+        print(f"⚠️ Bark 发送失败: {resp.status}")
+    except Exception as e:
+        print(f"⚠️ Bark 发送异常: {e}")
+    return False
+
 
 def build_opener_from_env():
     proxies = {}
@@ -238,7 +267,7 @@ def main():
     source_group.add_argument("--from-panel", action="store_true", help="load emails from panel")
     source_group.add_argument("--from-file", action="store_true", help="load emails from input file")
     parser.add_argument("--sleep", type=float, default=0.3, help="seconds between requests")
-    parser.add_argument("--timeout", type=int, default=20, help="request timeout seconds")
+    parser.add_argument("--timeout", type=int, default=60, help="request timeout seconds")
     parser.add_argument("--out", default="", help="output json file")
     parser.add_argument("--ban-domain-file", default="banned_email_domains.txt", help="append banned domains to file")
     parser.add_argument("--no-update-panel", action="store_true", help="do not update panel status")
@@ -384,6 +413,25 @@ def main():
     print(f"已封禁: {len(deactivated_emails)}")
     if not skip_update_panel:
         print(f"已标记封禁面板账号: {total_updated}")
+
+    # 发送 Bark 通知
+    bark_lines = [
+        "📬 邮箱封禁检测完成",
+        f"总数: {total}",
+        f"成功: {total - failed_count}",
+        f"失败: {failed_count}",
+        f"已封禁: {len(deactivated_emails)}",
+    ]
+    if not skip_update_panel:
+        bark_lines.append(f"已标记面板: {total_updated}")
+    if deactivated_emails:
+        bark_lines.append("")
+        bark_lines.append("❌ 封禁账号:")
+        for email in deactivated_emails[:10]:  # 最多显示10个
+            bark_lines.append(f"  {email}")
+        if len(deactivated_emails) > 10:
+            bark_lines.append(f"  ... 还有 {len(deactivated_emails) - 10} 个")
+    send_bark_message("\n".join(bark_lines))
 
 
 if __name__ == "__main__":

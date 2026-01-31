@@ -193,7 +193,7 @@
                                         <button @click="syncCliproxyAccount(account)" class="text-indigo-500 hover:text-indigo-700" :class="(!account.refresh_token || account.syncing) ? 'opacity-50 pointer-events-none' : ''" title="同步到 CLIProxyAPI">
                                             <i class="fas" :class="account.syncing ? 'fa-spinner fa-spin' : 'fa-cloud-arrow-up'"></i>
                                         </button>
-                                        <button @click="refreshSubscription(account)" class="text-orange-500 hover:text-orange-700" title="刷新订阅状态" x-show="account.access_token">
+                                        <button @click="refreshSubscription(account)" class="text-orange-500 hover:text-orange-700" title="刷新订阅状态" x-show="account.access_token || account.plus_access_token || account.team_access_token">
                                             <i class="fas fa-crown"></i>
                                         </button>
                                         <button @click="viewAccount(account)" class="text-gray-500 hover:text-gray-700" title="查看详情">
@@ -242,17 +242,50 @@
                 </div>
                 <div><strong>已同步到 CLIProxyAPI:</strong> <span x-text="currentAccount?.cliproxy_synced ? '是' : '否'"></span></div>
                 <div><strong>Account ID:</strong> <span x-text="currentAccount?.account_id || '-'"></span></div>
-                <div x-show="currentAccount?.access_token">
-                    <strong>Access Token:</strong>
+                <!-- 主 Token（默认/兼容） -->
+                <div x-show="currentAccount?.access_token" class="border-l-4 border-gray-300 pl-3">
+                    <strong>主 Access Token:</strong>
                     <div class="mt-1 p-2 bg-gray-100 rounded text-xs break-all max-h-20 overflow-auto" x-text="currentAccount?.access_token?.substring(0,200)+'...'"></div>
                     <button @click="copyText(currentAccount?.access_token)" class="text-blue-500 text-sm">复制完整Token</button>
                 </div>
-                <div x-show="currentAccount?.refresh_token">
-                    <strong>Refresh Token:</strong>
+                <div x-show="currentAccount?.refresh_token" class="border-l-4 border-gray-300 pl-3">
+                    <strong>主 Refresh Token:</strong>
                     <div class="mt-1 p-2 bg-gray-100 rounded text-xs break-all" x-text="currentAccount?.refresh_token"></div>
                     <button @click="copyText(currentAccount?.refresh_token)" class="text-blue-500 text-sm">复制</button>
                 </div>
-                <div x-show="currentAccount?.checkout_url">
+
+                <!-- Plus Token -->
+                <div x-show="currentAccount?.plus_access_token || currentAccount?.plus_refresh_token" class="mt-4 pt-4 border-t border-blue-200">
+                    <div class="text-blue-600 font-bold mb-2"><i class="fas fa-star"></i> Plus 账户 Token</div>
+                    <div x-show="currentAccount?.plus_access_token" class="border-l-4 border-blue-400 pl-3 mb-2">
+                        <strong>Plus Access Token:</strong>
+                        <div class="mt-1 p-2 bg-blue-50 rounded text-xs break-all max-h-20 overflow-auto" x-text="currentAccount?.plus_access_token?.substring(0,200)+'...'"></div>
+                        <button @click="copyText(currentAccount?.plus_access_token)" class="text-blue-500 text-sm">复制完整Token</button>
+                    </div>
+                    <div x-show="currentAccount?.plus_refresh_token" class="border-l-4 border-blue-400 pl-3">
+                        <strong>Plus Refresh Token:</strong>
+                        <div class="mt-1 p-2 bg-blue-50 rounded text-xs break-all" x-text="currentAccount?.plus_refresh_token"></div>
+                        <button @click="copyText(currentAccount?.plus_refresh_token)" class="text-blue-500 text-sm">复制</button>
+                    </div>
+                </div>
+
+                <!-- Team Token -->
+                <div x-show="currentAccount?.team_access_token || currentAccount?.team_refresh_token" class="mt-4 pt-4 border-t border-purple-200">
+                    <div class="text-purple-600 font-bold mb-2"><i class="fas fa-users"></i> Team 账户 Token</div>
+                    <div x-show="currentAccount?.team_access_token" class="border-l-4 border-purple-400 pl-3 mb-2">
+                        <strong>Team Access Token:</strong>
+                        <div class="mt-1 p-2 bg-purple-50 rounded text-xs break-all max-h-20 overflow-auto" x-text="currentAccount?.team_access_token?.substring(0,200)+'...'"></div>
+                        <button @click="copyText(currentAccount?.team_access_token)" class="text-purple-500 text-sm">复制完整Token</button>
+                    </div>
+                    <div x-show="currentAccount?.team_refresh_token" class="border-l-4 border-purple-400 pl-3">
+                        <strong>Team Refresh Token:</strong>
+                        <div class="mt-1 p-2 bg-purple-50 rounded text-xs break-all" x-text="currentAccount?.team_refresh_token"></div>
+                        <button @click="copyText(currentAccount?.team_refresh_token)" class="text-purple-500 text-sm">复制</button>
+                    </div>
+                </div>
+
+                <!-- 绑卡链接 -->
+                <div x-show="currentAccount?.checkout_url" class="mt-4 pt-4 border-t">
                     <strong>Plus 绑卡链接:</strong>
                     <a :href="currentAccount?.checkout_url" target="_blank" class="text-blue-500 hover:underline break-all" x-text="currentAccount?.checkout_url"></a>
                 </div>
@@ -660,7 +693,7 @@
                 loginError: '',
                 accounts: [],
                 stats: {},
-                filter: { search: '', status: '', has_rt: '', cliproxy_synced: '', date_from: '', date_to: '', page: 1, page_size: 20 },
+                filter: { search: '', status: '', has_rt: '', cliproxy_synced: '', pending: '', date_from: '', date_to: '', page: 1, page_size: 20 },
                 pagination: { total: 0, page: 1, page_size: 20, total_pages: 0 },
                 selectedIds: [],
                 showModal: false,
@@ -822,8 +855,9 @@
                     this.filter.has_rt = '';
                     this.filter.status = '';
                     this.filter.cliproxy_synced = '';
+                    this.filter.pending = '';
                     if (type === 'pending') {
-                        this.filter.status = 'pending';
+                        this.filter.pending = 'yes';
                     } else if (type === 'sync') {
                         this.filter.cliproxy_synced = 'yes';
                     } else if (type === 'banned') {
@@ -837,7 +871,7 @@
                 },
 
                 resetFilter() {
-                    this.filter = { search: '', status: '', has_rt: '', cliproxy_synced: '', date_from: '', date_to: '', page: 1, page_size: 20 };
+                    this.filter = { search: '', status: '', has_rt: '', cliproxy_synced: '', pending: '', date_from: '', date_to: '', page: 1, page_size: 20 };
                     this.loadAccounts();
                 },
 
@@ -1303,9 +1337,9 @@
                     try {
                         const res = await this.api(`/api/v1/accounts/${account.id}/refresh-subscription`, { method: 'POST' });
                         if (res?.message) {
-                            const msg = res.changed
-                                ? `订阅状态已更新: ${res.old_status || '未知'} → ${res.subscription_status}`
-                                : `订阅状态未变化: ${res.subscription_status}`;
+                            let msg = res.changed
+                                ? `订阅状态已更新:\n• 状态: ${res.old_status || '未知'} → ${res.subscription_status}\n• Plus: ${res.old_is_plus ? '是' : '否'} → ${res.is_plus ? '是' : '否'}\n• Team: ${res.old_is_team ? '是' : '否'} → ${res.is_team ? '是' : '否'}`
+                                : `订阅状态未变化:\n• 状态: ${res.subscription_status}\n• Plus: ${res.is_plus ? '是' : '否'}\n• Team: ${res.is_team ? '是' : '否'}`;
                             alert(msg);
                             this.loadAccounts();
                         } else if (res?.error) {

@@ -17,7 +17,8 @@ import os
 import base64
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import urlencode, urlparse, parse_qs, quote
+from urllib.parse import urlencode, urlparse, parse_qs, quote as url_quote
+import requests as std_requests
 
 from curl_cffi import requests
 
@@ -120,6 +121,119 @@ class Config:
     # 邮箱域名黑名单（由 tools/check_mailbox.py 维护）
     BANNED_DOMAIN_FILE = "banned_email_domains.txt"
     EMAIL_MAX_RETRY = 10
+
+    # ClashX Meta API 配置
+    CLASH_API_BASE = "http://127.0.0.1:9090"
+    CLASH_PROXY_GROUP = "GLOBAL"  # 策略组名称
+    # 只保留美国节点，排除其他所有地区
+    CLASH_INCLUDE_KEYWORDS = ["美国", "🇺🇸"]  # 只包含美国节点
+    CLASH_EXCLUDE_KEYWORDS = [
+        "剩余流量", "距离下次重置", "套餐到期", "建议",  # 排除信息节点
+        "DIRECT", "REJECT"  # 排除系统节点
+    ]
+    CLASH_SWITCH_INTERVAL = 5  # 每注册成功多少个切换一次节点
+
+
+# ============================================================================
+# ClashX Meta 节点切换器
+# ============================================================================
+class ClashProxySwitcher:
+    """ClashX Meta 节点自动切换器（只保留美国节点）"""
+
+    def __init__(self, group_name: str = None, include_keywords: List[str] = None,
+                 exclude_keywords: List[str] = None, switch_interval: int = None):
+        self.api_base = Config.CLASH_API_BASE
+        self.group_name = group_name or Config.CLASH_PROXY_GROUP
+        self.include_keywords = include_keywords or Config.CLASH_INCLUDE_KEYWORDS
+        self.exclude_keywords = exclude_keywords or Config.CLASH_EXCLUDE_KEYWORDS
+        self.switch_interval = switch_interval or Config.CLASH_SWITCH_INTERVAL
+        self.available_nodes: List[str] = []
+        self.current_index: int = 0
+        self.enabled: bool = False
+        self.lock = threading.Lock()  # 线程安全锁
+        self._load_nodes()
+
+    def _load_nodes(self):
+        """加载可用节点列表（只保留美国节点）"""
+        try:
+            resp = std_requests.get(f"{self.api_base}/proxies/{url_quote(self.group_name)}", timeout=5)
+            if resp.status_code != 200:
+                print(f"⚠️ ClashX API 连接失败: {resp.status_code}")
+                return
+
+            data = resp.json()
+            all_nodes = data.get("all", [])
+            current = data.get("now", "")
+
+            # 筛选可用节点（只保留美国节点）
+            self.available_nodes = []
+            for node in all_nodes:
+                # 必须包含 "丨" 才是有效代理节点
+                if "丨" not in node:
+                    continue
+                # 必须包含美国关键词
+                if not any(kw in node for kw in self.include_keywords):
+                    continue
+                # 跳过排除关键词中的节点
+                if any(kw in node for kw in self.exclude_keywords):
+                    continue
+                self.available_nodes.append(node)
+
+            if self.available_nodes:
+                self.enabled = True
+                # 找到当前节点的位置
+                if current in self.available_nodes:
+                    self.current_index = self.available_nodes.index(current)
+                print(f"✅ ClashX 节点切换器已启用")
+                print(f"   - 可用美国节点: {len(self.available_nodes)} 个")
+                print(f"   - 当前节点: {current}")
+                print(f"   - 切换频率: 每注册成功 {self.switch_interval} 个")
+            else:
+                print("⚠️ 未找到可用的美国节点")
+
+        except Exception as e:
+            print(f"⚠️ ClashX API 初始化失败: {e}")
+            self.enabled = False
+
+    def switch_next(self) -> bool:
+        """切换到下一个节点（线程安全）"""
+        with self.lock:
+            if not self.enabled or not self.available_nodes:
+                return False
+
+            # 移动到下一个节点
+            self.current_index = (self.current_index + 1) % len(self.available_nodes)
+            next_node = self.available_nodes[self.current_index]
+
+            try:
+                resp = std_requests.put(
+                    f"{self.api_base}/proxies/{url_quote(self.group_name)}",
+                    headers={"Content-Type": "application/json"},
+                    json={"name": next_node},
+                    timeout=5
+                )
+                if resp.status_code == 204:
+                    print(f"\n🔄 节点切换成功: {next_node}")
+                    return True
+                else:
+                    print(f"\n⚠️ 节点切换失败: {resp.status_code}")
+                    return False
+            except Exception as e:
+                print(f"\n⚠️ 节点切换异常: {e}")
+                return False
+
+    def should_switch(self, success_count: int) -> bool:
+        """判断是否应该切换节点（每 N 个成功后切换一次）"""
+        if not self.enabled:
+            return False
+        # 在成功 5, 10, 15, ... 个后切换
+        return success_count > 0 and success_count % self.switch_interval == 0
+
+    def get_current_node(self) -> str:
+        """获取当前节点名称"""
+        if self.available_nodes and 0 <= self.current_index < len(self.available_nodes):
+            return self.available_nodes[self.current_index]
+        return "未知"
 
 
 def _resolve_bark_config() -> Tuple[bool, str, str]:
@@ -1130,6 +1244,8 @@ class ChatGPTRegister:
         self.save_lock = threading.Lock()
         self.panel_token = None
         self.panel_lock = threading.Lock()
+        self.proxy_switcher: Optional[ClashProxySwitcher] = None
+        self._last_switch_count = 0  # 记录上次切换时的成功数
 
     def _create_mail_client(self) -> MailClient:
         """为每个线程创建独立的邮箱客户端"""
@@ -1138,12 +1254,24 @@ class ChatGPTRegister:
             return client
         return None
 
-    def register_one(self, thread_id: int = 0, mail_client: MailClient = None) -> Optional[Dict]:
-        """注册一个账号"""
+    def register_one(self, thread_id: int = 0, mail_client: MailClient = None, enable_proxy_switch: bool = True) -> Optional[Dict]:
+        """注册一个账号
+
+        Args:
+            thread_id: 线程ID（用于日志前缀）
+            mail_client: 邮箱客户端实例
+            enable_proxy_switch: 是否启用自动节点切换（仅在独立调用时生效）
+        """
         prefix = f"[线程{thread_id}]" if thread_id > 0 else ""
         print(f"\n{prefix} " + "=" * 50)
         print(f"{prefix} 开始注册新账号")
         print(f"{prefix} " + "=" * 50)
+
+        # 如果是独立调用且启用节点切换，初始化切换器
+        if mail_client is None and enable_proxy_switch and self.proxy_switcher is None:
+            print("🌐 初始化 ClashX 节点切换器...")
+            self.proxy_switcher = ClashProxySwitcher()
+            self._last_switch_count = 0
 
         # 使用传入的邮箱客户端或创建新的
         if mail_client is None:
@@ -1259,6 +1387,16 @@ class ChatGPTRegister:
             with self.lock:
                 self.success_count += 1
                 current_success = self.success_count
+                # 检查是否需要切换节点
+                should_switch = (self.proxy_switcher and
+                                 self.proxy_switcher.should_switch(current_success) and
+                                 current_success > self._last_switch_count)
+                if should_switch:
+                    self._last_switch_count = current_success
+
+            # 在锁外执行节点切换（避免阻塞其他线程）
+            if should_switch and self.proxy_switcher:
+                self.proxy_switcher.switch_next()
 
             print(f"\n{prefix} ✅ 注册成功! (当前成功: {current_success})")
             if checkout_url:
@@ -1414,10 +1552,25 @@ class ChatGPTRegister:
             # 短暂延迟避免请求过于频繁
             time.sleep(random.uniform(2, 5))
 
-    def register_batch_concurrent(self, target_count: int, concurrency: int) -> Tuple[int, int]:
-        """并发批量注册，直到成功数量达到目标"""
+    def register_batch_concurrent(self, target_count: int, concurrency: int, enable_proxy_switch: bool = True) -> Tuple[int, int]:
+        """并发批量注册，直到成功数量达到目标
+
+        Args:
+            target_count: 目标成功数量
+            concurrency: 并发数
+            enable_proxy_switch: 是否启用自动节点切换
+        """
         print(f"\n开始并发注册，目标成功数量: {target_count}，并发数: {concurrency}")
         print(f"注意: 程序将持续运行直到成功注册 {target_count} 个账号\n")
+
+        # 初始化节点切换器
+        if enable_proxy_switch:
+            print("🌐 初始化 ClashX 节点切换器...")
+            self.proxy_switcher = ClashProxySwitcher()
+            self._last_switch_count = 0
+        else:
+            print("⚠️ 自动节点切换已禁用")
+            self.proxy_switcher = None
 
         # 重置计数器
         self.success_count = 0
@@ -1451,9 +1604,23 @@ class ChatGPTRegister:
 
         return self.success_count, self.fail_count
 
-    def register_batch(self, count: int) -> Tuple[int, int]:
-        """批量注册（单线程，保持向后兼容）"""
+    def register_batch(self, count: int, enable_proxy_switch: bool = True) -> Tuple[int, int]:
+        """批量注册（单线程，保持向后兼容）
+
+        Args:
+            count: 目标成功数量
+            enable_proxy_switch: 是否启用自动节点切换
+        """
         print(f"\n开始批量注册，目标成功数量: {count} 个账号...")
+
+        # 初始化节点切换器
+        if enable_proxy_switch:
+            print("🌐 初始化 ClashX 节点切换器...")
+            self.proxy_switcher = ClashProxySwitcher()
+            self._last_switch_count = 0
+        else:
+            print("⚠️ 自动节点切换已禁用")
+            self.proxy_switcher = None
 
         # 创建邮箱客户端
         mail_client = self._create_mail_client()
@@ -1483,7 +1650,16 @@ class ChatGPTRegister:
 # ============================================================================
 def main():
     """主函数"""
-    import sys
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ChatGPT 纯协议注册机")
+    parser.add_argument("count", type=int, nargs="?", default=None,
+                        help="目标成功数量")
+    parser.add_argument("concurrency", type=int, nargs="?", default=1,
+                        help="并发数量 (默认: 1)")
+    parser.add_argument("--no-switch", action="store_true",
+                        help="禁用自动节点切换")
+    args = parser.parse_args()
 
     print("=" * 60)
     print("ChatGPT 纯协议注册机 (curl_cffi) - 并发版")
@@ -1491,12 +1667,10 @@ def main():
     print("=" * 60)
 
     try:
-        if len(sys.argv) >= 3:
-            count = int(sys.argv[1])
-            concurrency = int(sys.argv[2])
-        elif len(sys.argv) >= 2:
-            count = int(sys.argv[1])
-            concurrency = 1
+        # 获取注册数量和并发数
+        if args.count is not None:
+            count = args.count
+            concurrency = args.concurrency
         else:
             count = int(input("请输入目标成功数量: ").strip())
             concurrency = int(input("请输入并发数量 (1为单线程): ").strip() or "1")
@@ -1508,6 +1682,10 @@ def main():
         if concurrency < 1:
             concurrency = 1
 
+        # 显示配置
+        if args.no_switch:
+            print("⚠️ 自动节点切换已禁用")
+
         # 预加载名字文件
         Utils.load_names()
 
@@ -1515,11 +1693,11 @@ def main():
 
         if concurrency == 1:
             if count == 1:
-                register.register_one()
+                register.register_one(enable_proxy_switch=not args.no_switch)
             else:
-                register.register_batch(count)
+                register.register_batch(count, enable_proxy_switch=not args.no_switch)
         else:
-            register.register_batch_concurrent(count, concurrency)
+            register.register_batch_concurrent(count, concurrency, enable_proxy_switch=not args.no_switch)
 
     except KeyboardInterrupt:
         print("\n\n⚠️ 用户中断程序运行")

@@ -218,6 +218,13 @@ func (s *AccountService) List(filter models.AccountFilter) (*models.PaginatedRes
 	} else if filter.CliproxySynced == "no" {
 		query = query.Where("cliproxy_synced = ?", false)
 	}
+	// 待绑卡筛选：有绑卡链接且未绑卡成功（与统计逻辑一致）
+	if filter.Pending == "yes" {
+		boundStatuses := []string{"team", "chatgptteamplan"}
+		query = query.Where("checkout_url IS NOT NULL AND checkout_url != ''").
+			Where("status NOT IN ?", []string{"banned", "failed", "expired", "rate_limited"}).
+			Where("NOT (status = ? OR LOWER(subscription_status) IN ?)", "bound", boundStatuses)
+	}
 	if filter.DateFrom != "" {
 		query = query.Where("created_at >= ?", filter.DateFrom)
 	}
@@ -330,5 +337,16 @@ func (s *AccountService) GetStats() (*models.AccountStats, error) {
 func (s *AccountService) GetAllWithAccessToken() ([]*models.Account, error) {
 	var accounts []*models.Account
 	err := s.db.Where("access_token IS NOT NULL AND access_token != ''").Find(&accounts).Error
+	return accounts, err
+}
+
+// GetAllWithAnyToken 获取所有有任何 token 的账号（包括 plus/team token）
+func (s *AccountService) GetAllWithAnyToken() ([]*models.Account, error) {
+	var accounts []*models.Account
+	err := s.db.Where(
+		"(access_token IS NOT NULL AND access_token != '') OR "+
+			"(plus_access_token IS NOT NULL AND plus_access_token != '') OR "+
+			"(team_access_token IS NOT NULL AND team_access_token != '')",
+	).Find(&accounts).Error
 	return accounts, err
 }

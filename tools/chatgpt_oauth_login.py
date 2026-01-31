@@ -13,10 +13,11 @@ import secrets
 import threading
 import time
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Dict, Optional, Tuple
-from urllib.parse import urlencode, urlparse, parse_qs
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import urlencode, urlparse, parse_qs, quote as url_quote
 import subprocess
 try:
     import pybase64
@@ -72,6 +73,177 @@ class Config:
     DEBUG_CONSENT = True
     DEBUG_CONSENT_DIR = "debug"
 
+    # Bark 通知配置
+    BARK_ENABLED = True
+    BARK_URL = "https://api.day.app/sJdCVyNSgBrkoXrrFA3pTD"
+    BARK_TITLE = "OAuth双RT刷新"
+
+    # ClashX Meta API 配置
+    CLASH_API_BASE = "http://127.0.0.1:9090"
+    CLASH_PROXY_GROUP = "GLOBAL"  # 策略组名称
+    # 只保留美国节点
+    CLASH_INCLUDE_KEYWORDS = ["美国", "🇺🇸"]  # 只包含美国节点
+    CLASH_EXCLUDE_KEYWORDS = [
+        "剩余流量", "距离下次重置", "套餐到期", "建议",  # 排除信息节点
+        "DIRECT", "REJECT"  # 排除系统节点
+    ]
+    CLASH_SWITCH_INTERVAL = 5  # 每处理多少账号切换一次节点
+
+    # 多线程配置
+    DEFAULT_WORKERS = 3  # 默认并发线程数
+
+
+# ============================================================================
+# ClashX Meta 节点切换器
+# ============================================================================
+class ClashProxySwitcher:
+    """ClashX Meta 节点自动切换器（只保留美国节点）- 线程安全版"""
+
+    def __init__(self, group_name: str = None, include_keywords: List[str] = None,
+                 exclude_keywords: List[str] = None, switch_interval: int = None):
+        self.api_base = Config.CLASH_API_BASE
+        self.group_name = group_name or Config.CLASH_PROXY_GROUP
+        self.include_keywords = include_keywords or Config.CLASH_INCLUDE_KEYWORDS
+        self.exclude_keywords = exclude_keywords or Config.CLASH_EXCLUDE_KEYWORDS
+        self.switch_interval = switch_interval or Config.CLASH_SWITCH_INTERVAL
+        self.available_nodes: List[str] = []
+        self.current_index: int = 0
+        self.enabled: bool = False
+        self._lock = threading.Lock()  # 线程锁
+        self._processed_count: int = 0  # 已处理账号计数（多线程共享）
+        self._load_nodes()
+
+    def _load_nodes(self):
+        """加载可用节点列表（只保留美国节点）"""
+        try:
+            resp = std_requests.get(f"{self.api_base}/proxies/{url_quote(self.group_name)}", timeout=5)
+            if resp.status_code != 200:
+                print(f"⚠️ ClashX API 连接失败: {resp.status_code}")
+                return
+
+            data = resp.json()
+            all_nodes = data.get("all", [])
+            current = data.get("now", "")
+
+            # 筛选可用节点（只保留美国节点）
+            self.available_nodes = []
+            for node in all_nodes:
+                # 必须包含 "丨" 才是有效代理节点
+                if "丨" not in node:
+                    continue
+                # 必须包含美国关键词
+                if not any(kw in node for kw in self.include_keywords):
+                    continue
+                # 跳过排除关键词中的节点
+                if any(kw in node for kw in self.exclude_keywords):
+                    continue
+                self.available_nodes.append(node)
+
+            if self.available_nodes:
+                self.enabled = True
+                # 找到当前节点的位置
+                if current in self.available_nodes:
+                    self.current_index = self.available_nodes.index(current)
+                print(f"✅ ClashX 节点切换器已启用")
+                print(f"   - 可用美国节点: {len(self.available_nodes)} 个")
+                print(f"   - 当前节点: {current}")
+                print(f"   - 切换频率: 每 {self.switch_interval} 个账号")
+            else:
+                print("⚠️ 未找到可用的美国节点")
+
+        except Exception as e:
+            print(f"⚠️ ClashX API 初始化失败: {e}")
+            self.enabled = False
+
+    def switch_next(self) -> bool:
+        """切换到下一个节点（线程安全）"""
+        if not self.enabled or not self.available_nodes:
+            return False
+
+        with self._lock:
+            # 移动到下一个节点
+            self.current_index = (self.current_index + 1) % len(self.available_nodes)
+            next_node = self.available_nodes[self.current_index]
+
+        try:
+            resp = std_requests.put(
+                f"{self.api_base}/proxies/{url_quote(self.group_name)}",
+                headers={"Content-Type": "application/json"},
+                json={"name": next_node},
+                timeout=5
+            )
+            if resp.status_code == 204:
+                print(f"\n🔄 节点切换成功: {next_node}")
+                return True
+            else:
+                print(f"\n⚠️ 节点切换失败: {resp.status_code}")
+                return False
+        except Exception as e:
+            print(f"\n⚠️ 节点切换异常: {e}")
+            return False
+
+    def check_and_switch(self) -> bool:
+        """检查并切换节点（线程安全，多线程共享计数）
+
+        Returns:
+            bool: 是否执行了切换
+        """
+        if not self.enabled:
+            return False
+
+        with self._lock:
+            self._processed_count += 1
+            # 每 N 个账号切换一次
+            if self._processed_count % self.switch_interval == 0:
+                should_switch = True
+            else:
+                should_switch = False
+
+        if should_switch:
+            self.switch_next()
+            time.sleep(2)  # 切换节点后等待 2 秒
+            return True
+        return False
+
+    def should_switch(self, account_index: int) -> bool:
+        """判断是否应该切换节点（每 N 个账号切换一次）"""
+        if not self.enabled:
+            return False
+        # 在处理第 6, 11, 16, ... 个账号前切换
+        return account_index > 1 and (account_index - 1) % self.switch_interval == 0
+
+    def get_current_node(self) -> str:
+        """获取当前节点名称"""
+        if self.available_nodes and 0 <= self.current_index < len(self.available_nodes):
+            return self.available_nodes[self.current_index]
+        return "未知"
+
+
+# ============================================================================
+# Bark 通知
+# ============================================================================
+def send_bark_message(text: str, title: str = None) -> bool:
+    """发送 Bark 通知消息"""
+    if not Config.BARK_ENABLED:
+        return False
+    if not Config.BARK_URL:
+        print("⚠️ Bark 未配置，跳过通知")
+        return False
+    try:
+        url = Config.BARK_URL.rstrip("/")
+        resp = std_requests.get(
+            url,
+            params={"title": title or Config.BARK_TITLE, "body": text},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            print("📨 Bark 通知已发送")
+            return True
+        print(f"⚠️ Bark 发送失败: {resp.status_code} - {resp.text[:200]}")
+    except Exception as e:
+        print(f"⚠️ Bark 发送异常: {e}")
+    return False
+
 
 # ============================================================================
 # Panel API 客户端
@@ -111,7 +283,7 @@ class PanelAPIClient:
         }
 
     def fetch_accounts(self, page: int = 1, page_size: int = 100, status: str = "") -> Optional[Dict]:
-        """获取账号列表"""
+        """获取账号列表（单页）"""
         if not self.token:
             if not self.login():
                 return None
@@ -135,6 +307,38 @@ class PanelAPIClient:
         except Exception as e:
             print(f"❌ 获取账号列表异常: {e}")
             return None
+
+    def fetch_all_accounts(self, page_size: int = 100, status: str = "") -> List[Dict]:
+        """获取所有账号（自动分页）"""
+        all_accounts = []
+        page = 1
+
+        while True:
+            result = self.fetch_accounts(page=page, page_size=page_size, status=status)
+            if not result:
+                break
+
+            accounts = result.get("accounts", result.get("data", []))
+            if not accounts:
+                break
+
+            all_accounts.extend(accounts)
+
+            # 检查是否还有更多页
+            # 后端返回格式: {"data": [...], "total": 250, "page": 1, "page_size": 100, "total_pages": 3}
+            # 或者: {"pagination": {"total_pages": 3, "page": 1}}
+            pagination = result.get("pagination", {})
+            total_pages = pagination.get("total_pages") or result.get("total_pages", 1)
+            current_page = pagination.get("page") or result.get("page", page)
+
+            print(f"   📄 已获取第 {current_page}/{total_pages} 页，累计 {len(all_accounts)} 个账号")
+
+            if current_page >= total_pages:
+                break
+
+            page += 1
+
+        return all_accounts
 
     def update_refresh_token(self, account_id: int, refresh_token: str) -> bool:
         """更新账号的 Refresh Token"""
@@ -804,21 +1008,28 @@ class ChatGPTOAuthClient:
             print(f"❌ 密码验证异常: {e}")
             return False, "error"
 
-    def step5_select_workspace(self, workspace_id: str = None) -> Tuple[bool, str]:
-        """步骤5: 选择workspace (点击继续按钮)"""
+    def step5_select_workspace(self, workspace_id: str = None, workspace_type: str = None) -> Tuple[bool, str]:
+        """步骤5: 选择workspace (点击继续按钮)
+
+        Args:
+            workspace_id: 直接指定 workspace ID
+            workspace_type: 指定 workspace 类型 ("personal" 或 "team")
+        """
         print(f"\n📍 步骤5: 选择Workspace (同意授权)")
         try:
             self._delay()
 
-            # 如果没有提供workspace_id，尝试从cookies中获取
+            # 如果没有提供workspace_id，根据类型或默认从cookies中获取
             if not workspace_id:
-                workspace_id = self._get_workspace_id_from_cookies()
+                workspace_id = self._get_workspace_id_from_cookies(workspace_type)
 
             if not workspace_id:
                 print("❌ 无法获取workspace_id")
                 return False, "error"
 
             print(f"   Workspace ID: {workspace_id}")
+            if workspace_type:
+                print(f"   Workspace Type: {workspace_type}")
 
             headers = self._get_api_headers(
                 referer=f"{Config.AUTH_BASE}/sign-in-with-chatgpt/consent",
@@ -847,8 +1058,15 @@ class ChatGPTOAuthClient:
             print(f"❌ Workspace选择异常: {e}")
             return False, "error"
 
-    def _get_workspace_id_from_cookies(self) -> Optional[str]:
-        """从cookies中解析workspace_id"""
+    def _get_workspace_id_from_cookies(self, workspace_type: str = None) -> Optional[str]:
+        """从cookies中解析workspace_id
+
+        Args:
+            workspace_type: 指定 workspace 类型
+                - None: 返回第一个 workspace
+                - "personal": 返回 Personal workspace (kind="personal")
+                - "team": 返回 Team/Organization workspace (kind="organization")
+        """
         import base64
         try:
             cookies = self.session.cookies
@@ -864,12 +1082,58 @@ class ChatGPTOAuthClient:
                 decoded = base64.b64decode(value).decode('utf-8')
                 data = json.loads(decoded)
                 workspaces = data.get('workspaces', [])
-                if workspaces:
-                    # 返回第一个workspace的id
+
+                if not workspaces:
+                    return None
+
+                # 如果没有指定类型，返回第一个
+                if not workspace_type:
                     return workspaces[0].get('id')
+
+                # 根据 kind 字段筛选
+                for ws in workspaces:
+                    kind = ws.get('kind', '').lower()
+                    ws_id = ws.get('id', '')
+                    ws_name = ws.get('name') or '个人帐户'
+
+                    if workspace_type.lower() == 'personal':
+                        # Personal workspace: kind="personal"
+                        if kind == 'personal':
+                            print(f"   找到 Personal workspace: {ws_name} ({ws_id})")
+                            return ws_id
+                    elif workspace_type.lower() == 'team':
+                        # Team/Organization workspace: kind="organization"
+                        if kind == 'organization':
+                            print(f"   找到 Team workspace: {ws_name} ({ws_id})")
+                            return ws_id
+
+                # 如果没找到指定类型，打印可用的 workspaces
+                print(f"   ⚠️ 未找到 {workspace_type} 类型的 workspace")
+                available = [(ws.get('name') or '个人帐户', ws.get('kind')) for ws in workspaces]
+                print(f"   可用 workspaces: {available}")
+                return None
+
         except Exception as e:
             print(f"   解析workspace失败: {e}")
         return None
+
+    def _get_all_workspaces_from_cookies(self) -> list:
+        """获取所有 workspaces 列表"""
+        import base64
+        try:
+            cookies = self.session.cookies
+            cookie_value = cookies.get('oai-client-auth-session')
+            if cookie_value:
+                value = cookie_value.split('.')[0]
+                padding = 4 - len(value) % 4
+                if padding != 4:
+                    value += '=' * padding
+                decoded = base64.b64decode(value).decode('utf-8')
+                data = json.loads(decoded)
+                return data.get('workspaces', [])
+        except Exception as e:
+            print(f"   获取workspaces失败: {e}")
+        return []
 
 
 
@@ -892,10 +1156,14 @@ class ChatGPTOAuthClient:
             print(f"   响应状态: {resp.status_code}")
             if resp.status_code == 200:
                 result = resp.json()
-                continue_url = result.get('continue_url', '')
-                if continue_url:
-                    print(f"✅ 验证码验证成功")
-                    return True, continue_url
+                print(f"   响应内容: {str(result)[:200]}")
+
+                print(f"✅ 验证码验证成功")
+
+                # 验证码验证成功后，总是需要选择 workspace
+                # 这和密码验证成功后的行为一致
+                return True, "workspace_select"
+
             print(f"❌ 验证码验证失败: {resp.text[:200]}")
             return False, "error"
         except Exception as e:
@@ -1230,13 +1498,30 @@ def display_accounts_menu(accounts: list, batch_mode: bool = False) -> Optional[
 
 
 def is_bound_account(account: Dict) -> bool:
-    """判断账号是否为已绑卡状态"""
+    """判断账号是否为已绑卡状态
+
+    检测条件（满足任一即可）：
+    1. status == "bound"
+    2. plus_bound == true
+    3. team_bound == true
+    """
     status = str(account.get("status", "")).lower()
-    return status == "bound"
+    if status == "bound":
+        return True
+    if account.get("plus_bound"):
+        return True
+    if account.get("team_bound"):
+        return True
+    return False
 
 
-def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
+def login_single_account(panel_client: PanelAPIClient, account: Dict, workspace_type: str = None) -> bool:
     """处理单个账号的 OAuth 登录流程
+
+    Args:
+        panel_client: Panel API 客户端
+        account: 账号信息
+        workspace_type: workspace 类型 ("personal" 或 "team")，None 表示使用默认
 
     Returns:
         bool: 是否成功获取并更新 RT
@@ -1249,8 +1534,9 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
         print(f"❌ [{email}] 账号信息不完整 (缺少邮箱或密码)")
         return False
 
+    workspace_label = f" [{workspace_type.upper()}]" if workspace_type else ""
     print(f"\n{'='*60}")
-    print(f"🔄 正在处理: {email}")
+    print(f"🔄 正在处理: {email}{workspace_label}")
     print(f"{'='*60}")
 
     client = ChatGPTOAuthClient()
@@ -1294,9 +1580,15 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
             return False
         continue_url = result
 
-    # 步骤5b: 选择workspace
+    # 步骤5b: 选择workspace (根据指定的类型)
     if result == "workspace_select" or continue_url == "workspace_select":
-        success, continue_url = client.step5_select_workspace()
+        # 如果指定了 workspace_type，先显示可用的 workspaces
+        if workspace_type:
+            all_workspaces = client._get_all_workspaces_from_cookies()
+            ws_info = [(ws.get('name') or '个人帐户', ws.get('kind')) for ws in all_workspaces]
+            print(f"   📋 可用 Workspaces: {ws_info}")
+
+        success, continue_url = client.step5_select_workspace(workspace_type=workspace_type)
         if not success:
             print(f"   ❌ Workspace选择失败")
             return False
@@ -1322,36 +1614,58 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
         access_token = tokens.get("access_token")
 
         if refresh_token:
-            print(f"   🔐 RT: {refresh_token[:40]}...")
+            type_label = f" ({workspace_type})" if workspace_type else ""
+            print(f"   🔐 RT{type_label}: {refresh_token[:40]}...")
 
-            # 更新线上 Panel 的 RT
+            # 根据 workspace_type 决定保存到哪个字段
             panel_updated = False
-            if panel_client.update_refresh_token(account_id, refresh_token):
-                print(f"   ✅ 线上 RT 更新成功!")
-                panel_updated = True
-
-            # 同时更新 access_token
-            if access_token:
-                account_info = extract_account_info(access_token)
+            if workspace_type == "personal":
+                # 保存到 Plus 字段
                 update_data = {
-                    "email": email,
-                    "password": password,
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "account_id": account_info.get("account_id", ""),
-                    "status": "active",
+                    "plus_access_token": access_token,
+                    "plus_refresh_token": refresh_token,
                 }
                 if panel_client.update_account(account_id, update_data):
+                    print(f"   ✅ Plus RT/AT 更新成功!")
+                    panel_updated = True
+            elif workspace_type == "team":
+                # 保存到 Team 字段
+                update_data = {
+                    "team_access_token": access_token,
+                    "team_refresh_token": refresh_token,
+                }
+                if panel_client.update_account(account_id, update_data):
+                    print(f"   ✅ Team RT/AT 更新成功!")
+                    panel_updated = True
+            else:
+                # 默认行为：更新主 RT 字段
+                if panel_client.update_refresh_token(account_id, refresh_token):
+                    print(f"   ✅ 线上 RT 更新成功!")
                     panel_updated = True
 
-            # 获取RT成功后，清空绑卡状态
-            if panel_updated:
+                # 同时更新 access_token
+                if access_token:
+                    account_info = extract_account_info(access_token)
+                    update_data = {
+                        "email": email,
+                        "password": password,
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                        "account_id": account_info.get("account_id", ""),
+                        "status": "active",
+                    }
+                    if panel_client.update_account(account_id, update_data):
+                        panel_updated = True
+
+            # 获取RT成功后，清空绑卡状态（仅默认模式）
+            if panel_updated and not workspace_type:
                 panel_client.update_status(account_id, "active")
 
             # 保存到本地文件
             result_data = {
                 "email": email,
                 "account_id": account_id,
+                "workspace_type": workspace_type or "default",
                 "access_token": access_token,
                 "refresh_token": refresh_token,
                 "created_at": datetime.now().isoformat(),
@@ -1368,6 +1682,116 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
         return False
 
 
+def login_account_dual_workspace(panel_client: PanelAPIClient, account: Dict) -> Tuple[bool, bool]:
+    """对同一账号分别登录 Personal 和 Team workspace，保存两套 RT
+
+    智能检测：
+    1. 根据绑卡状态（plus_bound/team_bound）或订阅状态（is_plus/is_team）决定需要获取哪些 RT
+    2. 跳过已存在的 RT，只获取缺失的
+
+    Returns:
+        Tuple[bool, bool]: (personal_success, team_success)
+    """
+    email = account.get("email")
+    print(f"\n{'#'*60}")
+    print(f"🔄 智能 Workspace 登录: {email}")
+    print(f"{'#'*60}")
+
+    # 检测绑卡状态（优先使用）和订阅状态（备用）
+    plus_bound = bool(account.get("plus_bound"))
+    team_bound = bool(account.get("team_bound"))
+    is_plus = bool(account.get("is_plus"))
+    is_team = bool(account.get("is_team"))
+
+    # 综合判断：绑卡成功 或 订阅标记为 true 都视为已订阅
+    has_plus_subscription = plus_bound or is_plus
+    has_team_subscription = team_bound or is_team
+
+    # 检测已有的 RT
+    has_plus_rt = bool(account.get("plus_refresh_token"))
+    has_team_rt = bool(account.get("team_refresh_token"))
+
+    print(f"\n📋 绑卡/订阅状态检测:")
+    print(f"   - Plus: 绑卡={'✅' if plus_bound else '❌'}, 订阅={'✅' if is_plus else '❌'} → {'✅ 需处理' if has_plus_subscription else '❌ 无订阅'}")
+    print(f"   - Team: 绑卡={'✅' if team_bound else '❌'}, 订阅={'✅' if is_team else '❌'} → {'✅ 需处理' if has_team_subscription else '❌ 无订阅'}")
+
+    print(f"\n📋 RT 状态检测:")
+    print(f"   - Plus RT: {'✅ 已存在' if has_plus_rt else '❌ 缺失'}")
+    print(f"   - Team RT: {'✅ 已存在' if has_team_rt else '❌ 缺失'}")
+
+    # 根据绑卡/订阅状态和 RT 状态决定需要获取哪些
+    # 只有绑卡成功或有订阅标记，且缺失 RT 时才需要获取
+    need_personal = has_plus_subscription and not has_plus_rt
+    need_team = has_team_subscription and not has_team_rt
+
+    # 如果已有 RT 或未绑定订阅，视为成功（不需要处理）
+    personal_success = has_plus_rt or not has_plus_subscription
+    team_success = has_team_rt or not has_team_subscription
+
+    # 显示需要获取的 RT
+    if not need_personal and not need_team:
+        if not has_plus_subscription and not has_team_subscription:
+            print(f"\n⚠️ [{email}] 未绑卡且无订阅，跳过")
+        else:
+            reasons = []
+            if has_plus_subscription:
+                reasons.append("Plus RT 已存在" if has_plus_rt else "未绑定 Plus")
+            if has_team_subscription:
+                reasons.append("Team RT 已存在" if has_team_rt else "未绑定 Team")
+            print(f"\n✅ [{email}] 无需获取 RT ({', '.join(reasons)})")
+        return personal_success, team_success
+
+    print(f"\n🎯 需要获取:")
+    if need_personal:
+        print(f"   - Plus RT（已绑卡/订阅，缺失 RT）")
+    if need_team:
+        print(f"   - Team RT（已绑卡/订阅，缺失 RT）")
+
+    # 登录 Personal workspace（如果需要）
+    if need_personal:
+        print(f"\n--- 登录 Personal Workspace (获取 Plus RT) ---")
+        personal_success = login_single_account(panel_client, account, workspace_type="personal")
+        if personal_success:
+            print(f"   ✅ Personal (Plus) RT 获取成功")
+        else:
+            print(f"   ⚠️ Personal workspace 登录失败或不存在")
+    elif is_plus:
+        print(f"\n--- Personal Workspace: 跳过（已有 Plus RT）---")
+
+    # 等待一下再进行下一次登录（如果需要）
+    if need_personal and need_team:
+        time.sleep(2)
+
+    # 登录 Team workspace（如果需要）
+    if need_team:
+        print(f"\n--- 登录 Team Workspace (获取 Team RT) ---")
+        team_success = login_single_account(panel_client, account, workspace_type="team")
+        if team_success:
+            print(f"   ✅ Team RT 获取成功")
+        else:
+            print(f"   ⚠️ Team workspace 登录失败或不存在")
+    elif is_team:
+        print(f"\n--- Team Workspace: 跳过（已有 Team RT）---")
+
+    # 汇总结果
+    print(f"\n📊 [{email}] 登录结果:")
+    if is_plus:
+        status = "✅" if personal_success else "❌"
+        note = " (已有)" if has_plus_rt else (" (新获取)" if personal_success else "")
+        print(f"   - Plus: {status}{note}")
+    else:
+        print(f"   - Plus: ⏭️ 跳过（未绑定订阅）")
+
+    if is_team:
+        status = "✅" if team_success else "❌"
+        note = " (已有)" if has_team_rt else (" (新获取)" if team_success else "")
+        print(f"   - Team: {status}{note}")
+    else:
+        print(f"   - Team: ⏭️ 跳过（未绑定订阅）")
+
+    return personal_success, team_success
+
+
 def auto_login_from_panel():
     """从线上 Panel 获取已绑卡账号并自动登录获取 RT"""
     print("=" * 60)
@@ -1381,19 +1805,14 @@ def auto_login_from_panel():
         print("❌ 无法连接 Panel API")
         return
 
-    # 2. 获取账号列表
-    print("\n📥 正在获取账号列表...")
-    result = panel_client.fetch_accounts(page=1, page_size=100)
-    if not result:
-        print("❌ 获取账号列表失败")
-        return
-
-    accounts = result.get("accounts", result.get("data", []))
+    # 2. 获取所有账号（自动分页）
+    print("\n📥 正在获取所有账号...")
+    accounts = panel_client.fetch_all_accounts(page_size=100)
     if not accounts:
         print("❌ 没有找到账号")
         return
 
-    print(f"✅ 获取到 {len(accounts)} 个账号")
+    print(f"✅ 获取到全部 {len(accounts)} 个账号")
 
     # 3. 仅保留已绑卡账号
     selected_accounts = [acc for acc in accounts if is_bound_account(acc)]
@@ -1431,6 +1850,77 @@ def auto_login_from_panel():
     print(f"   ✅ 成功: {success_count}")
     print(f"   ❌ 失败: {failed_count}")
     print(f"   📝 总计: {total}")
+    print(f"{'='*60}")
+
+
+def auto_login_dual_workspace_from_panel():
+    """从 Panel 获取同时有 Plus 和 Team 的账号，分别登录两次获取两套 RT"""
+    print("=" * 60)
+    print("ChatGPT OAuth 双 Workspace 登录")
+    print("同时获取 Personal (Plus) 和 Team 的 RT")
+    print("=" * 60)
+
+    # 1. 连接 Panel API
+    print("\n🔌 正在连接 Panel API...")
+    panel_client = PanelAPIClient()
+    if not panel_client.login():
+        print("❌ 无法连接 Panel API")
+        return
+
+    # 2. 获取所有账号（自动分页）
+    print("\n📥 正在获取所有账号...")
+    accounts = panel_client.fetch_all_accounts(page_size=100)
+    if not accounts:
+        print("❌ 没有找到账号")
+        return
+
+    print(f"✅ 获取到全部 {len(accounts)} 个账号")
+
+    # 3. 筛选同时有 Plus 和 Team 的账号（is_plus=true 且 is_team=true）
+    dual_accounts = [
+        acc for acc in accounts
+        if acc.get("is_plus") and acc.get("is_team")
+    ]
+
+    if not dual_accounts:
+        print("❌ 未找到同时有 Plus 和 Team 订阅的账号")
+        print("   提示: 需要 is_plus=true 且 is_team=true 的账号")
+        return
+
+    print(f"✅ 已筛选到 {len(dual_accounts)} 个双订阅账号")
+
+    # 4. 初始化节点切换器
+    print("\n🌐 初始化 ClashX 节点切换器...")
+    proxy_switcher = ClashProxySwitcher()
+
+    # 5. 批量处理
+    total = len(dual_accounts)
+    personal_success = 0
+    team_success = 0
+
+    for i, account in enumerate(dual_accounts, 1):
+        # 检查是否需要切换节点（每 5 个账号切换一次）
+        if proxy_switcher.should_switch(i):
+            proxy_switcher.switch_next()
+            time.sleep(2)  # 切换节点后等待 2 秒
+
+        print(f"\n[{i}/{total}] 处理中...")
+        p_ok, t_ok = login_account_dual_workspace(panel_client, account)
+        if p_ok:
+            personal_success += 1
+        if t_ok:
+            team_success += 1
+
+        if i < total:
+            time.sleep(3)
+
+    # 6. 统计
+    print(f"\n{'='*60}")
+    print(f"📊 双 Workspace 登录完成")
+    print(f"{'='*60}")
+    print(f"   📝 总账号数: {total}")
+    print(f"   ✅ Personal (Plus) 成功: {personal_success}")
+    print(f"   ✅ Team 成功: {team_success}")
     print(f"{'='*60}")
 
 
@@ -1607,22 +2097,312 @@ def process_callback_only():
         print("\n❌ Token换取失败")
 
 
+def login_by_email(email: str, workspace_type: str = None, dual_mode: bool = False):
+    """通过指定邮箱登录
+
+    Args:
+        email: 账号邮箱
+        workspace_type: workspace 类型 ("personal" 或 "team")
+        dual_mode: 是否双 workspace 模式
+    """
+    print("=" * 60)
+    print(f"ChatGPT OAuth 指定账号登录: {email}")
+    print("=" * 60)
+
+    # 连接 Panel API
+    print("\n🔌 正在连接 Panel API...")
+    panel_client = PanelAPIClient()
+    if not panel_client.login():
+        print("❌ 无法连接 Panel API")
+        return
+
+    # 从 Panel 获取该账号信息（自动分页查找）
+    print(f"\n📥 正在查找账号: {email}")
+    accounts = panel_client.fetch_all_accounts(page_size=100)
+    if not accounts:
+        print("❌ 获取账号列表失败")
+        return
+
+    # 查找匹配的账号
+    target_account = None
+    for acc in accounts:
+        if acc.get("email", "").lower() == email.lower():
+            target_account = acc
+            break
+
+    if not target_account:
+        print(f"❌ 未找到账号: {email}")
+        return
+
+    print(f"✅ 找到账号: {email} (ID: {target_account.get('id')})")
+
+    # 根据模式登录
+    if dual_mode:
+        print("\n🔄 使用双 Workspace 模式...")
+        login_account_dual_workspace(panel_client, target_account)
+    elif workspace_type:
+        print(f"\n🔄 使用 {workspace_type} Workspace 模式...")
+        login_single_account(panel_client, target_account, workspace_type=workspace_type)
+    else:
+        print("\n🔄 使用默认模式...")
+        login_single_account(panel_client, target_account)
+
+
+def auto_refresh_dual_rt_from_panel(workers: int = None):
+    """对所有已绑卡或已有RT的账号重新获取双 RT（Personal + Team）
+
+    Args:
+        workers: 并发线程数，默认使用 Config.DEFAULT_WORKERS
+    """
+    workers = workers or Config.DEFAULT_WORKERS
+
+    print("=" * 60)
+    print("ChatGPT OAuth 批量刷新双 RT（多线程版）")
+    print("对所有已绑卡或已有RT的账号重新获取 Personal (Plus) 和 Team 的 RT")
+    print(f"并发线程数: {workers}")
+    print("=" * 60)
+
+    # 1. 连接 Panel API
+    print("\n🔌 正在连接 Panel API...")
+    panel_client = PanelAPIClient()
+    if not panel_client.login():
+        print("❌ 无法连接 Panel API")
+        return
+
+    # 2. 获取所有账号
+    print("\n📥 正在获取所有账号...")
+    accounts = panel_client.fetch_all_accounts(page_size=100)
+    if not accounts:
+        print("❌ 没有找到账号")
+        return
+
+    print(f"✅ 获取到全部 {len(accounts)} 个账号")
+
+    # 3. 筛选需要处理的账号
+    def has_dual_rt(acc: Dict) -> bool:
+        """检查是否已有双 RT"""
+        return bool(acc.get("plus_refresh_token")) and bool(acc.get("team_refresh_token"))
+
+    def should_process(acc: Dict) -> bool:
+        """判断账号是否需要处理"""
+        # 已有双 RT 的跳过
+        if has_dual_rt(acc):
+            return False
+        # 已绑卡
+        if is_bound_account(acc):
+            return True
+        # 已有任意 RT
+        if acc.get("refresh_token"):
+            return True
+        if acc.get("plus_refresh_token"):
+            return True
+        if acc.get("team_refresh_token"):
+            return True
+        return False
+
+    # 统计
+    all_eligible = [acc for acc in accounts if is_bound_account(acc) or acc.get("refresh_token") or acc.get("plus_refresh_token") or acc.get("team_refresh_token")]
+    already_has_dual = [acc for acc in all_eligible if has_dual_rt(acc)]
+    eligible_accounts = [acc for acc in accounts if should_process(acc)]
+
+    if not eligible_accounts:
+        print(f"❌ 未找到需要处理的账号")
+        print(f"   - 符合条件的账号: {len(all_eligible)} 个")
+        print(f"   - 已有双RT（跳过）: {len(already_has_dual)} 个")
+        return
+
+    # 统计
+    bound_count = sum(1 for acc in eligible_accounts if is_bound_account(acc))
+    has_any_rt_count = sum(1 for acc in eligible_accounts if acc.get("refresh_token") or acc.get("plus_refresh_token") or acc.get("team_refresh_token"))
+    print(f"✅ 已筛选到 {len(eligible_accounts)} 个需要处理的账号")
+    print(f"   - 已绑卡: {bound_count} 个")
+    print(f"   - 已有部分RT: {has_any_rt_count} 个")
+    print(f"   - 已有双RT（跳过）: {len(already_has_dual)} 个")
+
+    # 4. 初始化节点切换器
+    print("\n🌐 初始化 ClashX 节点切换器...")
+    proxy_switcher = ClashProxySwitcher()
+
+    # 5. 线程安全的统计计数器
+    total = len(eligible_accounts)
+    stats_lock = threading.Lock()
+    stats = {
+        "personal_success": 0,
+        "personal_fail": 0,
+        "personal_skip": 0,
+        "team_success": 0,
+        "team_fail": 0,
+        "team_skip": 0,
+        "processed": 0,
+    }
+    failed_accounts = []  # 记录失败的账号
+
+    def process_account(account: Dict) -> Tuple[str, bool, bool]:
+        """处理单个账号（线程工作函数）"""
+        email = account.get("email", "unknown")
+
+        # 检查并切换节点（线程安全）
+        proxy_switcher.check_and_switch()
+
+        # 获取当前进度
+        with stats_lock:
+            stats["processed"] += 1
+            current = stats["processed"]
+
+        print(f"\n[{current}/{total}] 🔄 {email}")
+
+        try:
+            p_ok, t_ok = login_account_dual_workspace(panel_client, account)
+            return email, p_ok, t_ok
+        except Exception as e:
+            print(f"   ❌ 异常: {e}")
+            return email, False, False
+
+    # 6. 使用线程池并发处理
+    print(f"\n🚀 开始并发处理 ({workers} 线程)...")
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        # 提交所有任务
+        future_to_account = {
+            executor.submit(process_account, acc): acc
+            for acc in eligible_accounts
+        }
+
+        # 收集结果
+        for future in as_completed(future_to_account):
+            account = future_to_account[future]
+            email = account.get("email", "unknown")
+
+            try:
+                _, p_ok, t_ok = future.result()
+            except Exception as e:
+                print(f"   ❌ {email} 任务异常: {e}")
+                p_ok, t_ok = False, False
+
+            # 获取账号信息
+            plus_bound = bool(account.get("plus_bound"))
+            team_bound = bool(account.get("team_bound"))
+            is_plus = bool(account.get("is_plus"))
+            is_team = bool(account.get("is_team"))
+            has_plus_subscription = plus_bound or is_plus
+            has_team_subscription = team_bound or is_team
+            has_plus_rt = bool(account.get("plus_refresh_token"))
+            has_team_rt = bool(account.get("team_refresh_token"))
+
+            # 线程安全地更新统计
+            with stats_lock:
+                # 统计 Personal/Plus RT
+                if has_plus_subscription:
+                    if has_plus_rt or p_ok:
+                        stats["personal_success"] += 1
+                    else:
+                        stats["personal_fail"] += 1
+                        if not any(email == fa[0] for fa in failed_accounts):
+                            failed_accounts.append((email, "Plus RT 获取失败"))
+                else:
+                    stats["personal_skip"] += 1
+
+                # 统计 Team RT
+                if has_team_subscription:
+                    if has_team_rt or t_ok:
+                        stats["team_success"] += 1
+                    else:
+                        stats["team_fail"] += 1
+                        if not any(email == fa[0] for fa in failed_accounts):
+                            failed_accounts.append((email, "Team RT 获取失败"))
+                else:
+                    stats["team_skip"] += 1
+
+    # 7. 输出统计结果
+    print("\n" + "=" * 60)
+    print("📊 批量刷新双 RT 完成（多线程）")
+    print("=" * 60)
+    print(f"   总计处理: {total} 个账号")
+    print(f"   并发线程: {workers}")
+    print(f"\n   📋 Plus RT 统计:")
+    print(f"      - 成功: {stats['personal_success']}")
+    print(f"      - 失败: {stats['personal_fail']}")
+    print(f"      - 跳过(无订阅): {stats['personal_skip']}")
+    print(f"\n   📋 Team RT 统计:")
+    print(f"      - 成功: {stats['team_success']}")
+    print(f"      - 失败: {stats['team_fail']}")
+    print(f"      - 跳过(无订阅): {stats['team_skip']}")
+
+    if failed_accounts:
+        print(f"\n   ❌ 失败账号列表 ({len(failed_accounts)} 个):")
+        for email, reason in failed_accounts[:10]:  # 只显示前10个
+            print(f"      - {email}: {reason}")
+        if len(failed_accounts) > 10:
+            print(f"      ... 还有 {len(failed_accounts) - 10} 个未显示")
+
+    print("=" * 60)
+
+    # 8. 发送 Bark 通知
+    bark_lines = [
+        "✅ 批量刷新双 RT 完成",
+        f"总计: {total} 个账号 ({workers}线程)",
+        "",
+        f"Plus RT: 成功 {stats['personal_success']} / 失败 {stats['personal_fail']}",
+        f"Team RT: 成功 {stats['team_success']} / 失败 {stats['team_fail']}",
+    ]
+    if failed_accounts:
+        bark_lines.append(f"\n❌ 失败: {len(failed_accounts)} 个账号")
+    send_bark_message("\n".join(bark_lines))
+
+
 def main():
-    """主函数：仅保留从 Panel 获取账号自动登录"""
+    """主函数：支持多种登录模式"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ChatGPT OAuth 登录工具")
+    parser.add_argument("--email", type=str,
+                       help="指定账号邮箱")
+    parser.add_argument("--dual", action="store_true",
+                       help="双 Workspace 模式：同时获取 Personal 和 Team 的 RT（仅处理已有双订阅的账号）")
+    parser.add_argument("--refresh-dual", action="store_true",
+                       help="刷新双 RT：对所有已绑卡账号重新获取 Personal 和 Team 的 RT")
+    parser.add_argument("--workspace", choices=["personal", "team"],
+                       help="指定 Workspace 类型 (personal 或 team)")
+    parser.add_argument("--workers", type=int, default=Config.DEFAULT_WORKERS,
+                       help=f"并发线程数 (默认: {Config.DEFAULT_WORKERS})")
+    args = parser.parse_args()
+
     if Config.USE_BASH_LAUNCHER and os.getenv("OAUTH_LAUNCHED") != "1":
         script_path = os.path.join(os.path.dirname(__file__), Config.BASH_LAUNCHER_PATH)
         if os.path.exists(script_path):
             env = os.environ.copy()
             env["OAUTH_LAUNCHED"] = "1"
+            # 传递命令行参数
+            cmd = ["bash", script_path]
+            if args.email:
+                cmd.extend(["--email", args.email])
+            if args.dual:
+                cmd.append("--dual")
+            if args.refresh_dual:
+                cmd.append("--refresh-dual")
+            if args.workspace:
+                cmd.extend(["--workspace", args.workspace])
+            if args.workers != Config.DEFAULT_WORKERS:
+                cmd.extend(["--workers", str(args.workers)])
             try:
-                subprocess.run(["bash", script_path], check=True, env=env)
+                subprocess.run(cmd, check=True, env=env)
                 return
             except Exception as e:
                 print(f"⚠️ 启动脚本失败，改用直接运行: {e}")
         else:
             print(f"⚠️ 未找到启动脚本: {script_path}，改用直接运行")
 
-    auto_login_from_panel()
+    # 如果指定了邮箱，使用指定账号登录
+    if args.email:
+        login_by_email(args.email, workspace_type=args.workspace, dual_mode=args.dual)
+    elif args.refresh_dual:
+        print("🔄 刷新双 RT 模式（所有已绑卡账号）...")
+        auto_refresh_dual_rt_from_panel(workers=args.workers)
+    elif args.dual:
+        print("🔄 使用双 Workspace 模式（仅双订阅账号）...")
+        auto_login_dual_workspace_from_panel()
+    else:
+        auto_login_from_panel()
 
 
 if __name__ == "__main__":

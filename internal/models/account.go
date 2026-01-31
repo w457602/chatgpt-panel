@@ -14,6 +14,10 @@ type Account struct {
 	Password           string          `gorm:"size:255;not null" json:"password"`
 	AccessToken        string          `gorm:"type:text" json:"access_token"`
 	RefreshToken       string          `gorm:"type:text" json:"refresh_token"`
+	PlusAccessToken    string          `gorm:"type:text" json:"plus_access_token"`    // Personal/Plus 账户的 AT
+	PlusRefreshToken   string          `gorm:"type:text" json:"plus_refresh_token"`   // Personal/Plus 账户的 RT
+	TeamAccessToken    string          `gorm:"type:text" json:"team_access_token"`    // Team 账户的 AT
+	TeamRefreshToken   string          `gorm:"type:text" json:"team_refresh_token"`   // Team 账户的 RT
 	CheckoutURL        string          `gorm:"size:1000" json:"checkout_url"`
 	TeamCheckoutURL    string          `gorm:"size:1000" json:"team_checkout_url"`
 	PlusBound          bool            `gorm:"default:false" json:"plus_bound"`  // Plus绑卡是否成功
@@ -44,17 +48,18 @@ func (Account) TableName() string {
 
 // AccountFilter 查询过滤器
 type AccountFilter struct {
-	Search   string `form:"search"`
-	Status   string `form:"status"`
-	Domain   string `form:"domain"`
-	HasRT    string `form:"has_rt"` // 是否有 refresh_token: yes/no
+	Search         string `form:"search"`
+	Status         string `form:"status"`
+	Domain         string `form:"domain"`
+	HasRT          string `form:"has_rt"`          // 是否有 refresh_token: yes/no
 	CliproxySynced string `form:"cliproxy_synced"` // 是否已同步: yes/no
-	DateFrom string `form:"date_from"`
-	DateTo   string `form:"date_to"`
-	Page     int    `form:"page,default=1"`
-	PageSize int    `form:"page_size,default=20"`
-	SortBy   string `form:"sort_by,default=created_at"`
-	SortDir  string `form:"sort_dir,default=desc"`
+	Pending        string `form:"pending"`         // 待绑卡筛选: yes (有绑卡链接且未绑卡成功)
+	DateFrom       string `form:"date_from"`
+	DateTo         string `form:"date_to"`
+	Page           int    `form:"page,default=1"`
+	PageSize       int    `form:"page_size,default=20"`
+	SortBy         string `form:"sort_by,default=created_at"`
+	SortDir        string `form:"sort_dir,default=desc"`
 }
 
 // AccountStats 统计信息
@@ -112,4 +117,23 @@ type CreateAccountRequest struct {
 // UpdateRefreshTokenRequest 更新 RT 请求
 type UpdateRefreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
+// UpdateAccountRequest 更新账号请求（所有字段可选）
+type UpdateAccountRequest struct {
+	Email              string          `json:"email"`
+	Password           string          `json:"password"`
+	AccessToken        string          `json:"access_token"`
+	RefreshToken       string          `json:"refresh_token"`
+	PlusAccessToken    string          `json:"plus_access_token"`
+	PlusRefreshToken   string          `json:"plus_refresh_token"`
+	TeamAccessToken    string          `json:"team_access_token"`
+	TeamRefreshToken   string          `json:"team_refresh_token"`
+	CheckoutURL        string          `json:"checkout_url"`
+	TeamCheckoutURL    string          `json:"team_checkout_url"`
+	AccountID          string          `json:"account_id"`
+	SubscriptionStatus string          `json:"subscription_status"`
+	SessionCookies     json.RawMessage `json:"session_cookies"`
+	Status             string          `json:"status"`
+	Name               string          `json:"name"`
 }

@@ -11,11 +11,7 @@ import re
 import string
 import time
 import uuid
-try:
-    import pybase64
-except ModuleNotFoundError:
-    print("❌ 缺少依赖 pybase64，请先运行: bash run_register.sh")
-    raise
+import pybase64
 import threading
 import os
 import base64
@@ -109,7 +105,7 @@ class Config:
     PANEL_BASE = "https://openai.netpulsex.icu"
     PANEL_USERNAME = "admin"
     PANEL_PASSWORD = "admin123"
-    PANEL_IMPORT_ENABLED = True  # 已适配新系统 API
+    PANEL_IMPORT_ENABLED = True
 
     # Bark 通知（注册成功后推送）
     BARK_ENABLED = True
@@ -1018,88 +1014,21 @@ class ChatGPTRegisterClient:
             print(f"⚠️ 获取 Access Token 失败: {e}")
             return None
 
-    def generate_checkout_url(self, access_token: str) -> Tuple[Optional[str], Optional[str]]:
-        """生成 Plus 和 Team 订阅支付链接（从 Stripe init 获取真正的直链）
+    def generate_checkout_url(self, access_token: str, workspace_name: str = "MyTeam") -> Tuple[Optional[str], Optional[str]]:
+        """生成 Plus 和 Team(Business) 订阅支付链接
 
-        返回: (plus_checkout_url, team_checkout_url)
+        Returns:
+            Tuple[Optional[str], Optional[str]]: (plus_url, team_url)
         """
-        print(f"\n📍 生成订阅支付链接...")
-        plus_url = None
-        team_url = None
+        print(f"\n📍 生成绑卡链接...")
+        plus_url = self._create_checkout_and_get_stripe_url(access_token, "plus")
+        team_url = self._create_checkout_and_get_stripe_url(access_token, "team", workspace_name)
+        return (plus_url, team_url)
 
-        # 获取 Plus 绑卡链接
-        try:
-            print(f"\n   🔹 获取 Plus 绑卡链接...")
-            plus_data = self._create_checkout_session(access_token, plan_type="plus")
-            if plus_data:
-                session_id = plus_data.get("checkout_session_id")
-                pub_key = plus_data.get("publishable_key")
-                if session_id and pub_key:
-                    plus_url = self._get_stripe_hosted_url(session_id, pub_key)
-                    if plus_url:
-                        print(f"   ✅ Plus 直链: {plus_url[:60]}...")
-        except Exception as e:
-            print(f"   ❌ 获取 Plus 链接异常: {e}")
-
-        # 获取 Team 绑卡链接
-        try:
-            print(f"\n   🔹 获取 Team 绑卡链接...")
-            team_data = self._create_checkout_session(access_token, plan_type="team")
-            if team_data:
-                session_id = team_data.get("checkout_session_id")
-                pub_key = team_data.get("publishable_key")
-                if session_id and pub_key:
-                    team_url = self._get_stripe_hosted_url(session_id, pub_key)
-                    if team_url:
-                        print(f"   ✅ Team 直链: {team_url[:60]}...")
-        except Exception as e:
-            print(f"   ❌ 获取 Team 链接异常: {e}")
-
-        return plus_url, team_url
-
-    def _get_stripe_hosted_url(self, session_id: str, publishable_key: str) -> Optional[str]:
-        """从 Stripe init API 获取 stripe_hosted_url"""
-        print(f"\n📍 获取 Stripe 直链...")
-        try:
-            headers = {
-                "User-Agent": Config.USER_AGENT,
-                "Accept": "application/json",
-                "Origin": "https://js.stripe.com",
-                "Referer": "https://js.stripe.com/",
-            }
-
-            # GET https://api.stripe.com/v1/payment_pages/{session_id}?key={publishable_key}
-            resp = self.session.get(
-                f"https://api.stripe.com/v1/payment_pages/{session_id}",
-                params={"key": publishable_key},
-                headers=headers,
-                timeout=Config.TIMEOUT
-            )
-
-            if resp.status_code == 200:
-                data = resp.json()
-                stripe_hosted_url = data.get("stripe_hosted_url")
-                if stripe_hosted_url:
-                    print(f"   Session ID: {session_id[:50]}...")
-                    print(f"   支付状态: {data.get('payment_status', 'unknown')}")
-                    return stripe_hosted_url
-                print(f"❌ 响应中无 stripe_hosted_url")
-            else:
-                print(f"❌ 获取 Stripe 直链失败: {resp.status_code} - {resp.text[:200]}")
-            return None
-        except Exception as e:
-            print(f"❌ 获取 Stripe 直链异常: {e}")
-            return None
-
-    def _create_checkout_session(self, access_token: str, plan_type: str = "plus") -> Optional[Dict]:
-        """获取 Stripe Checkout Session（使用 custom 模式）
-
-        Args:
-            access_token: 访问令牌
-            plan_type: 计划类型，"plus" 或 "team"
-        """
-        plan_name = "plus" if plan_type == "plus" else "team"
-        print(f"\n   📍 创建 {plan_name.upper()} Checkout Session...")
+    def _create_checkout_and_get_stripe_url(self, access_token: str, plan_type: str = "plus", workspace_name: str = "MyTeam") -> Optional[str]:
+        """创建 Checkout Session 并获取 Stripe 直链 (custom 模式)"""
+        plan_name = "Plus" if plan_type == "plus" else "Team"
+        print(f"   📍 创建 {plan_name} Checkout Session (custom)...")
         try:
             headers = {
                 "User-Agent": Config.USER_AGENT,
@@ -1110,16 +1039,15 @@ class ChatGPTRegisterClient:
                 "Referer": f"{Config.CHATGPT_BASE}/",
             }
 
-            # 根据 plan_type 构建不同的 payload
             if plan_type == "team":
                 payload = {
                     "plan_name": "chatgptteamplan",
                     "team_plan_data": {
-                        "workspace_name": "MyTeam",
+                        "workspace_name": workspace_name,
                         "price_interval": "month",
                         "seat_quantity": 5
                     },
-                    "billing_details": {"country": "KR", "currency": "USD"},
+                    "billing_details": {"country": "US", "currency": "USD"},
                     "cancel_url": "https://chatgpt.com/#pricing",
                     "promo_campaign": {
                         "promo_campaign_id": "team-1-month-free",
@@ -1128,10 +1056,9 @@ class ChatGPTRegisterClient:
                     "checkout_ui_mode": "custom"
                 }
             else:
-                # Plus 计划
                 payload = {
                     "plan_name": "chatgptplusplan",
-                    "billing_details": {"country": "KR", "currency": "USD"},
+                    "billing_details": {"country": "US", "currency": "USD"},
                     "cancel_url": "https://chatgpt.com/#pricing",
                     "promo_campaign": {
                         "promo_campaign_id": "plus-1-month-free",
@@ -1149,11 +1076,11 @@ class ChatGPTRegisterClient:
 
             if resp.status_code == 200:
                 data = resp.json()
-                checkout_session_id = data.get("checkout_session_id")
-                publishable_key = data.get("publishable_key")
-                if checkout_session_id and publishable_key:
-                    print(f"      ✅ Session: {checkout_session_id[:40]}...")
-                    return data
+                session_id = data.get("checkout_session_id")
+                pub_key = data.get("publishable_key")
+                if session_id and pub_key:
+                    print(f"      ✅ Session: {session_id[:40]}...")
+                    return self._get_stripe_hosted_url(session_id, pub_key, plan_name)
                 print(f"      ❌ 响应中无 session_id: {data}")
             else:
                 print(f"      ❌ 创建失败: {resp.status_code} - {resp.text[:200]}")
@@ -1162,232 +1089,30 @@ class ChatGPTRegisterClient:
             print(f"      ❌ 创建异常: {e}")
             return None
 
-    def _create_stripe_payment_method(self, checkout_data: Dict, card_info: Dict) -> Optional[str]:
-        """调用 Stripe API 创建 Payment Method"""
-        print(f"\n📍 创建 Stripe Payment Method...")
+    def _get_stripe_hosted_url(self, session_id: str, publishable_key: str, plan_name: str) -> Optional[str]:
+        """从 Stripe init API 获取 stripe_hosted_url"""
+        print(f"      📍 获取 {plan_name} Stripe 直链...")
         try:
-            checkout_session_id = checkout_data.get("checkout_session_id")
-            publishable_key = checkout_data.get("publishable_key")
-
-            # 生成 Stripe 设备指纹（简化版）
-            guid = f"{uuid.uuid4()}{random.randint(10000, 99999)}"
-            muid = f"{uuid.uuid4()}{random.randint(10000, 99999)}"
-            sid = f"{uuid.uuid4()}{random.randint(10000, 99999)}"
-
-            # 构建表单数据
-            form_data = {
-                "billing_details[name]": card_info.get("name", ""),
-                "billing_details[email]": card_info.get("email", ""),
-                "billing_details[address][country]": card_info.get("address", {}).get("country", "US"),
-                "billing_details[address][line1]": card_info.get("address", {}).get("line1", ""),
-                "billing_details[address][city]": card_info.get("address", {}).get("city", ""),
-                "billing_details[address][postal_code]": card_info.get("address", {}).get("postal_code", ""),
-                "billing_details[address][state]": card_info.get("address", {}).get("state", ""),
-                "type": "card",
-                "card[number]": card_info.get("number", ""),
-                "card[cvc]": card_info.get("cvc", ""),
-                "card[exp_year]": card_info.get("exp_year", ""),
-                "card[exp_month]": card_info.get("exp_month", ""),
-                "allow_redisplay": "unspecified",
-                "payment_user_agent": "stripe.js/a10732936b; stripe-js-v3/a10732936b; payment-element; deferred-intent",
-                "referrer": Config.CHATGPT_BASE,
-                "time_on_page": str(random.randint(60000, 120000)),
-                "client_attribution_metadata[client_session_id]": str(uuid.uuid4()),
-                "client_attribution_metadata[checkout_session_id]": checkout_session_id,
-                "client_attribution_metadata[merchant_integration_source]": "elements",
-                "client_attribution_metadata[merchant_integration_subtype]": "payment-element",
-                "client_attribution_metadata[merchant_integration_version]": "2021",
-                "client_attribution_metadata[payment_intent_creation_flow]": "deferred",
-                "client_attribution_metadata[payment_method_selection_flow]": "automatic",
-                "guid": guid,
-                "muid": muid,
-                "sid": sid,
-                "key": publishable_key,
-                "_stripe_version": "2025-03-31.basil; checkout_server_update_beta=v1; checkout_manual_approval_preview=v1",
-                # hCaptcha token 暂时留空测试
-                # "radar_options[hcaptcha_token]": "",
-            }
-
-            headers = {
-                "User-Agent": Config.USER_AGENT,
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Origin": "https://js.stripe.com",
-                "Referer": "https://js.stripe.com/",
-            }
-
-            resp = self.session.post(
-                "https://api.stripe.com/v1/payment_methods",
-                headers=headers,
-                data=form_data,
-                timeout=Config.TIMEOUT
-            )
+            url = f"https://api.stripe.com/v1/payment_pages/{session_id}?key={publishable_key}"
+            resp = self.session.get(url, timeout=Config.TIMEOUT)
 
             if resp.status_code == 200:
                 data = resp.json()
-                payment_method_id = data.get("id")
-                if payment_method_id:
-                    print(f"✅ Payment Method: {payment_method_id}")
-                    return payment_method_id
-                print(f"❌ 响应中无 payment_method_id: {data}")
+                stripe_url = data.get("stripe_hosted_url")
+                if stripe_url:
+                    total = data.get("total_summary", {}).get("total", -1)
+                    if total == 0:
+                        print(f"      ✅ {plan_name} 直链 ($0): {stripe_url[:60]}...")
+                    else:
+                        print(f"      ⚠️ {plan_name} 直链 (${total/100}): {stripe_url[:60]}...")
+                    return stripe_url
+                print(f"      ❌ 响应中无 stripe_hosted_url")
             else:
-                print(f"❌ 创建 Payment Method 失败: {resp.status_code} - {resp.text[:300]}")
+                print(f"      ❌ Stripe API 失败: {resp.status_code}")
             return None
         except Exception as e:
-            print(f"❌ 创建 Payment Method 异常: {e}")
+            print(f"      ❌ Stripe API 异常: {e}")
             return None
-
-    def _confirm_stripe_payment(self, checkout_data: Dict, payment_method_id: str) -> bool:
-        """确认 Stripe 支付/绑卡"""
-        print(f"\n📍 确认 Stripe 绑卡...")
-        try:
-            checkout_session_id = checkout_data.get("checkout_session_id")
-            publishable_key = checkout_data.get("publishable_key")
-
-            # 生成设备指纹
-            guid = f"{uuid.uuid4()}{random.randint(10000, 99999)}"
-            muid = f"{uuid.uuid4()}{random.randint(10000, 99999)}"
-            sid = f"{uuid.uuid4()}{random.randint(10000, 99999)}"
-
-            form_data = {
-                "guid": guid,
-                "muid": muid,
-                "sid": sid,
-                "payment_method": payment_method_id,
-                "expected_amount": "0",  # 0刀验证
-                "expected_payment_method_type": "card",
-                "key": publishable_key,
-                "_stripe_version": "2025-03-31.basil; checkout_server_update_beta=v1; checkout_manual_approval_preview=v1",
-                # hCaptcha token 暂时留空
-                # "passive_captcha_token": "",
-            }
-
-            headers = {
-                "User-Agent": Config.USER_AGENT,
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Origin": "https://js.stripe.com",
-                "Referer": "https://js.stripe.com/",
-            }
-
-            resp = self.session.post(
-                f"https://api.stripe.com/v1/payment_pages/{checkout_session_id}/confirm",
-                headers=headers,
-                data=form_data,
-                timeout=Config.TIMEOUT
-            )
-
-            print(f"   响应状态: {resp.status_code}")
-            if resp.status_code == 200:
-                data = resp.json()
-                status = data.get("status")
-                print(f"   支付状态: {status}")
-                if status in ["complete", "succeeded", "processing"]:
-                    print(f"✅ 绑卡确认成功")
-                    return True
-                print(f"   响应: {json.dumps(data, ensure_ascii=False)[:300]}")
-            else:
-                print(f"❌ 确认绑卡失败: {resp.status_code} - {resp.text[:300]}")
-            return False
-        except Exception as e:
-            print(f"❌ 确认绑卡异常: {e}")
-            return False
-
-    def _poll_stripe_payment(self, checkout_data: Dict, max_attempts: int = 10) -> bool:
-        """轮询 Stripe 支付状态"""
-        print(f"\n📍 轮询支付状态...")
-        try:
-            checkout_session_id = checkout_data.get("checkout_session_id")
-            publishable_key = checkout_data.get("publishable_key")
-
-            headers = {
-                "User-Agent": Config.USER_AGENT,
-                "Accept": "application/json",
-                "Origin": "https://js.stripe.com",
-                "Referer": "https://js.stripe.com/",
-            }
-
-            for i in range(max_attempts):
-                time.sleep(2)
-                resp = self.session.get(
-                    f"https://api.stripe.com/v1/payment_pages/{checkout_session_id}/poll",
-                    params={
-                        "key": publishable_key,
-                        "_stripe_version": "2025-03-31.basil; checkout_server_update_beta=v1; checkout_manual_approval_preview=v1"
-                    },
-                    headers=headers,
-                    timeout=Config.TIMEOUT
-                )
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    status = data.get("status")
-                    payment_status = data.get("payment_status")
-                    print(f"   [{i+1}/{max_attempts}] 状态: {status}, 支付状态: {payment_status}")
-
-                    if status == "complete" or payment_status == "paid":
-                        print(f"✅ 绑卡成功！")
-                        return True
-                    elif status == "expired" or payment_status == "failed":
-                        print(f"❌ 绑卡失败: {status}")
-                        return False
-                else:
-                    print(f"   [{i+1}/{max_attempts}] 轮询失败: {resp.status_code}")
-
-            print(f"❌ 轮询超时")
-            return False
-        except Exception as e:
-            print(f"❌ 轮询异常: {e}")
-            return False
-
-    def bind_card(self, access_token: str, card_info: Dict) -> bool:
-        """
-        直接完成绑卡流程（不使用浏览器）
-
-        card_info 结构:
-        {
-            "number": "6258142602481653",
-            "cvc": "612",
-            "exp_month": "12",
-            "exp_year": "31",
-            "name": "Lorri Santillán",
-            "email": "xxx@xxx.com",
-            "address": {
-                "country": "KR",
-                "line1": "3502 강남대로",
-                "city": "종로구",
-                "postal_code": "03154",
-                "state": "Sejong"
-            }
-        }
-        """
-        print(f"\n{'='*60}")
-        print(f"📍 开始自动绑卡流程")
-        print(f"{'='*60}")
-
-        # 步骤1: 获取 checkout session
-        checkout_data = self._create_checkout_session(access_token)
-        if not checkout_data:
-            print(f"❌ 获取 Checkout Session 失败")
-            return False
-
-        # 步骤2: 创建 payment_method
-        payment_method_id = self._create_stripe_payment_method(checkout_data, card_info)
-        if not payment_method_id:
-            print(f"❌ 创建 Payment Method 失败")
-            return False
-
-        # 步骤3: 确认绑卡
-        if not self._confirm_stripe_payment(checkout_data, payment_method_id):
-            print(f"❌ 确认绑卡失败")
-            return False
-
-        # 步骤4: 轮询支付状态
-        if self._poll_stripe_payment(checkout_data):
-            print(f"\n✅ 绑卡流程完成！")
-            return True
-
-        return False
 
 
 # ============================================================================
@@ -1495,7 +1220,6 @@ class ChatGPTRegister:
             # 获取 Access Token 和完整 session 数据
             session_data = client.get_access_token()
             access_token = session_data.get("accessToken") if session_data else None
-            refresh_token = session_data.get("refreshToken") if session_data else None
 
             # 提取 account_id 和 expired
             account_id = None
@@ -1518,15 +1242,12 @@ class ChatGPTRegister:
             now_time = datetime.now().isoformat()
             account = {
                 "access_token": access_token,
-                "refresh_token": refresh_token,  # 添加 refresh_token
                 "account_id": account_id,
                 "email": email,
-                "password": password,  # 添加密码以备后续使用
                 "expired": expired,
                 "last_refresh": now_time,
                 "type": subscription_status,  # 使用从 token 中提取的订阅状态
                 "subscription_status": subscription_status,  # 添加 subscription_status 字段
-                "device_id": client.device_id,  # 添加 device_id
                 "cookies": client.get_cookies(),
                 "created_at": now_time
             }
@@ -1592,7 +1313,7 @@ class ChatGPTRegister:
                 return self.panel_token
             try:
                 resp = requests.post(
-                    f"{Config.PANEL_BASE}/api/v1/auth/login",  # Go 后端路径
+                    f"{Config.PANEL_BASE}/api/v1/auth/login",
                     json={"username": Config.PANEL_USERNAME, "password": Config.PANEL_PASSWORD},
                     timeout=Config.TIMEOUT,
                 )
@@ -1630,7 +1351,7 @@ class ChatGPTRegister:
             payload["refresh_token"] = account.get("refresh_token", "")
 
         if checkout_url:
-            payload["checkout_url"] = checkout_url
+            payload["plus_checkout_url"] = checkout_url
 
         if team_checkout_url:
             payload["team_checkout_url"] = team_checkout_url

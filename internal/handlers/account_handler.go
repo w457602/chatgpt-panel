@@ -127,7 +127,8 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		return
 	}
 
-	var req models.CreateAccountRequest
+	// 使用 UpdateAccountRequest，所有字段可选
+	var req models.UpdateAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -141,16 +142,50 @@ func (h *AccountHandler) Update(c *gin.Context) {
 		tokenChanged = true
 	}
 
-	account.Email = req.Email
-	account.Password = req.Password
-	account.AccessToken = req.AccessToken
-	account.RefreshToken = req.RefreshToken
-	account.CheckoutURL = req.CheckoutURL
-	account.TeamCheckoutURL = req.TeamCheckoutURL
-	account.AccountID = req.AccountID
-	account.SessionCookies = req.SessionCookies
-	account.Status = req.Status
-	account.Name = req.Name
+	// 只更新非空字段
+	if req.Email != "" {
+		account.Email = req.Email
+	}
+	if req.Password != "" {
+		account.Password = req.Password
+	}
+	if req.AccessToken != "" {
+		account.AccessToken = req.AccessToken
+	}
+	if req.RefreshToken != "" {
+		account.RefreshToken = req.RefreshToken
+	}
+	if req.PlusAccessToken != "" {
+		account.PlusAccessToken = req.PlusAccessToken
+	}
+	if req.PlusRefreshToken != "" {
+		account.PlusRefreshToken = req.PlusRefreshToken
+	}
+	if req.TeamAccessToken != "" {
+		account.TeamAccessToken = req.TeamAccessToken
+	}
+	if req.TeamRefreshToken != "" {
+		account.TeamRefreshToken = req.TeamRefreshToken
+	}
+	if req.CheckoutURL != "" {
+		account.CheckoutURL = req.CheckoutURL
+	}
+	if req.TeamCheckoutURL != "" {
+		account.TeamCheckoutURL = req.TeamCheckoutURL
+	}
+	if req.AccountID != "" {
+		account.AccountID = req.AccountID
+	}
+	if req.SessionCookies != nil {
+		account.SessionCookies = req.SessionCookies
+	}
+	if req.Status != "" {
+		account.Status = req.Status
+	}
+	if req.Name != "" {
+		account.Name = req.Name
+	}
+
 	planType := ""
 	if account.AccessToken != "" {
 		planType = services.ExtractSubscriptionStatusFromToken(account.AccessToken)
@@ -851,6 +886,7 @@ func (h *AccountHandler) RefreshAccountToken(c *gin.Context) {
 }
 
 // RefreshSubscriptionStatus 从现有 access_token 中刷新订阅状态
+// 同时检查 access_token、plus_access_token 和 team_access_token
 func (h *AccountHandler) RefreshSubscriptionStatus(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -864,20 +900,76 @@ func (h *AccountHandler) RefreshSubscriptionStatus(c *gin.Context) {
 		return
 	}
 
-	if account.AccessToken == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "账号无 access_token"})
+	// 检查是否有任何 token
+	hasAnyToken := account.AccessToken != "" || account.PlusAccessToken != "" || account.TeamAccessToken != ""
+	if !hasAnyToken {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "账号无任何 access_token"})
 		return
 	}
 
-	// 从 access_token 中提取订阅状态
-	plan := services.ExtractSubscriptionStatusFromToken(account.AccessToken)
+	isPlus := false
+	isTeam := false
+	plan := ""
+
+	// 1. 从主 access_token 提取
+	if account.AccessToken != "" {
+		flags := services.ExtractSubscriptionFlags(account.AccessToken)
+		if flags.IsPlus {
+			isPlus = true
+		}
+		if flags.IsTeam {
+			isTeam = true
+		}
+		if p := services.ExtractSubscriptionStatusFromToken(account.AccessToken); p != "" {
+			plan = p
+		}
+	}
+
+	// 2. 从 plus_access_token 提取
+	if account.PlusAccessToken != "" {
+		flags := services.ExtractSubscriptionFlags(account.PlusAccessToken)
+		if flags.IsPlus {
+			isPlus = true
+		}
+		if flags.IsTeam {
+			isTeam = true
+		}
+	}
+
+	// 3. 从 team_access_token 提取
+	if account.TeamAccessToken != "" {
+		flags := services.ExtractSubscriptionFlags(account.TeamAccessToken)
+		if flags.IsTeam {
+			isTeam = true
+		}
+		if flags.IsPlus {
+			isPlus = true
+		}
+	}
+
 	if plan == "" {
 		plan = "free"
 	}
 
+	changed := false
+	oldIsPlus := account.IsPlus
+	oldIsTeam := account.IsTeam
 	oldStatus := account.SubscriptionStatus
+
+	if account.IsPlus != isPlus {
+		account.IsPlus = isPlus
+		changed = true
+	}
+	if account.IsTeam != isTeam {
+		account.IsTeam = isTeam
+		changed = true
+	}
 	if plan != oldStatus {
 		account.SubscriptionStatus = plan
+		changed = true
+	}
+
+	if changed {
 		if err := h.accountService.Update(account); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -888,14 +980,19 @@ func (h *AccountHandler) RefreshSubscriptionStatus(c *gin.Context) {
 		"message":             "订阅状态已刷新",
 		"subscription_status": plan,
 		"old_status":          oldStatus,
-		"changed":             plan != oldStatus,
+		"is_plus":             isPlus,
+		"is_team":             isTeam,
+		"old_is_plus":         oldIsPlus,
+		"old_is_team":         oldIsTeam,
+		"changed":             changed,
 	})
 }
 
 // RefreshAllSubscriptions 批量刷新所有账号的订阅状态
+// 同时检查主 access_token、plus_access_token 和 team_access_token
 func (h *AccountHandler) RefreshAllSubscriptions(c *gin.Context) {
-	// 获取所有有 access_token 的账号
-	accounts, err := h.accountService.GetAllWithAccessToken()
+	// 获取所有有任何 token 的账号
+	accounts, err := h.accountService.GetAllWithAnyToken()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -906,23 +1003,68 @@ func (h *AccountHandler) RefreshAllSubscriptions(c *gin.Context) {
 	teamCount := 0
 
 	for _, account := range accounts {
-		if account.AccessToken == "" {
+		// 检查是否有任何 token
+		hasAnyToken := account.AccessToken != "" || account.PlusAccessToken != "" || account.TeamAccessToken != ""
+		if !hasAnyToken {
 			continue
 		}
 
-		// 提取订阅状态
-		flags := services.ExtractSubscriptionFlags(account.AccessToken)
-		plan := services.ExtractSubscriptionStatusFromToken(account.AccessToken)
-
 		changed := false
-		if account.IsPlus != flags.IsPlus {
-			account.IsPlus = flags.IsPlus
+		isPlus := false
+		isTeam := false
+		plan := ""
+
+		// 1. 从主 access_token 提取（兼容旧逻辑）
+		if account.AccessToken != "" {
+			flags := services.ExtractSubscriptionFlags(account.AccessToken)
+			if flags.IsPlus {
+				isPlus = true
+			}
+			if flags.IsTeam {
+				isTeam = true
+			}
+			if p := services.ExtractSubscriptionStatusFromToken(account.AccessToken); p != "" {
+				plan = p
+			}
+		}
+
+		// 2. 从 plus_access_token 提取（新逻辑）
+		if account.PlusAccessToken != "" {
+			flags := services.ExtractSubscriptionFlags(account.PlusAccessToken)
+			if flags.IsPlus {
+				isPlus = true
+			}
+			// Plus AT 也可能包含 Team 信息（如果是同一用户）
+			if flags.IsTeam {
+				isTeam = true
+			}
+		}
+
+		// 3. 从 team_access_token 提取（新逻辑）
+		if account.TeamAccessToken != "" {
+			flags := services.ExtractSubscriptionFlags(account.TeamAccessToken)
+			if flags.IsTeam {
+				isTeam = true
+			}
+			// Team AT 也可能包含 Plus 信息（如果是同一用户）
+			if flags.IsPlus {
+				isPlus = true
+			}
+		}
+
+		// 更新 is_plus 字段
+		if account.IsPlus != isPlus {
+			account.IsPlus = isPlus
 			changed = true
 		}
-		if account.IsTeam != flags.IsTeam {
-			account.IsTeam = flags.IsTeam
+
+		// 更新 is_team 字段
+		if account.IsTeam != isTeam {
+			account.IsTeam = isTeam
 			changed = true
 		}
+
+		// 更新 subscription_status（保持向后兼容，优先显示 team）
 		if plan != "" && plan != account.SubscriptionStatus {
 			account.SubscriptionStatus = plan
 			changed = true
@@ -934,10 +1076,10 @@ func (h *AccountHandler) RefreshAllSubscriptions(c *gin.Context) {
 			}
 		}
 
-		if flags.IsPlus {
+		if isPlus {
 			plusCount++
 		}
-		if flags.IsTeam {
+		if isTeam {
 			teamCount++
 		}
 	}

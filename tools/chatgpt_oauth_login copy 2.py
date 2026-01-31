@@ -12,11 +12,17 @@ import random
 import secrets
 import threading
 import time
+import re
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlencode, urlparse, parse_qs
-import pybase64
+import subprocess
+try:
+    import pybase64
+except ModuleNotFoundError:
+    print("❌ 缺少依赖 pybase64，请先运行: bash tools/oauth_login.sh")
+    raise
 import jwt
 
 from curl_cffi import requests
@@ -52,10 +58,19 @@ class Config:
     SEC_CH_UA = '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"'
 
     # 线上项目导入配置
-    PANEL_API_BASE = "https://chatgptpanel.zeabur.app"
+    PANEL_API_BASE = "https://openai.netpulsex.icu"
     PANEL_IMPORT_ENDPOINT = "/api/v1/accounts/import"
     PANEL_USERNAME = "admin"
     PANEL_PASSWORD = "admin123"
+    USE_BASH_LAUNCHER = True
+    BASH_LAUNCHER_PATH = "tools/oauth_login.sh"
+
+    # 邮箱API (用于自动获取验证码)
+    MAIL_API_BASE = "https://mail.chatgpt.org.uk/api"
+    OTP_MAX_ATTEMPTS = 60
+    OTP_INTERVAL = 3
+    DEBUG_CONSENT = True
+    DEBUG_CONSENT_DIR = "debug"
 
 
 # ============================================================================
@@ -96,7 +111,7 @@ class PanelAPIClient:
         }
 
     def fetch_accounts(self, page: int = 1, page_size: int = 100, status: str = "") -> Optional[Dict]:
-        """获取账号列表"""
+        """获取账号列表（单页）"""
         if not self.token:
             if not self.login():
                 return None
@@ -120,6 +135,38 @@ class PanelAPIClient:
         except Exception as e:
             print(f"❌ 获取账号列表异常: {e}")
             return None
+
+    def fetch_all_accounts(self, page_size: int = 100, status: str = "") -> List[Dict]:
+        """获取所有账号（自动分页）"""
+        all_accounts = []
+        page = 1
+
+        while True:
+            result = self.fetch_accounts(page=page, page_size=page_size, status=status)
+            if not result:
+                break
+
+            accounts = result.get("accounts", result.get("data", []))
+            if not accounts:
+                break
+
+            all_accounts.extend(accounts)
+
+            # 检查是否还有更多页
+            # 后端返回格式: {"data": [...], "total": 250, "page": 1, "page_size": 100, "total_pages": 3}
+            # 或者: {"pagination": {"total_pages": 3, "page": 1}}
+            pagination = result.get("pagination", {})
+            total_pages = pagination.get("total_pages") or result.get("total_pages", 1)
+            current_page = pagination.get("page") or result.get("page", page)
+
+            print(f"   📄 已获取第 {current_page}/{total_pages} 页，累计 {len(all_accounts)} 个账号")
+
+            if current_page >= total_pages:
+                break
+
+            page += 1
+
+        return all_accounts
 
     def update_refresh_token(self, account_id: int, refresh_token: str) -> bool:
         """更新账号的 Refresh Token"""
@@ -165,6 +212,29 @@ class PanelAPIClient:
                 return False
         except Exception as e:
             print(f"❌ 更新账号信息异常: {e}")
+            return False
+
+    def update_status(self, account_id: int, status: str) -> bool:
+        """仅更新账号状态"""
+        if not self.token:
+            if not self.login():
+                return False
+
+        try:
+            resp = std_requests.patch(
+                f"{self.base_url}/api/v1/accounts/{account_id}/status",
+                json={"status": status},
+                headers=self._get_headers(),
+                timeout=30
+            )
+            if resp.status_code == 200:
+                print(f"✅ 账号状态已更新为 {status} (账号ID: {account_id})")
+                return True
+            else:
+                print(f"❌ 更新账号状态失败: {resp.status_code} - {resp.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"❌ 更新账号状态异常: {e}")
             return False
 
 
@@ -243,6 +313,63 @@ def import_to_panel(email: str, password: str, tokens: Dict) -> bool:
     except Exception as e:
         print(f"❌ 导入异常: {e}")
         return False
+
+
+# ============================================================================
+# 邮箱验证码获取 (mail.chatgpt.org.uk)
+# ============================================================================
+def _fetch_mail_messages(email: str) -> list:
+    try:
+        resp = std_requests.get(
+            f"{Config.MAIL_API_BASE}/emails",
+            params={"email": email},
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Origin": "https://mail.chatgpt.org.uk",
+                "Referer": "https://mail.chatgpt.org.uk/",
+            },
+            timeout=Config.TIMEOUT,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("success") and data.get("data", {}).get("emails"):
+                return data["data"]["emails"]
+    except Exception:
+        pass
+    return []
+
+
+def get_email_verification_code(email: str) -> Optional[str]:
+    """自动拉取邮箱验证码"""
+    print(f"⏳ 自动获取 {email} 的验证码...")
+    code_regex = re.compile(r'\b[A-Z0-9]{3}-[A-Z0-9]{3}\b|\b\d{6}\b')
+    checked_msg_ids = set()
+
+    for _ in range(Config.OTP_MAX_ATTEMPTS):
+        msgs = _fetch_mail_messages(email)
+        if msgs:
+            for msg in msgs:
+                msg_id = msg.get('id') or msg.get('subject', '') + str(msg.get('date', ''))
+                if msg_id in checked_msg_ids:
+                    continue
+                checked_msg_ids.add(msg_id)
+
+                content = " ".join([
+                    str(msg.get('subject') or ''),
+                    str(msg.get('html_content') or ''),
+                    str(msg.get('text_content') or ''),
+                    str(msg.get('body') or ''),
+                    str(msg.get('content') or ''),
+                ])
+
+                matches = code_regex.findall(content)
+                if matches:
+                    code = matches[0].replace('-', '')
+                    print(f"✅ 获取到验证码: {code}")
+                    return code
+        time.sleep(Config.OTP_INTERVAL)
+    print("⚠️ 获取验证码超时")
+    return None
 
 
 # ============================================================================
@@ -537,6 +664,7 @@ class ChatGPTOAuthClient:
         self.code_verifier: Optional[str] = None
         self.code_challenge: Optional[str] = None
         self.state: Optional[str] = None
+        self.consent_forbidden: bool = False
 
     def _delay(self, min_sec: float = 0.5, max_sec: float = 1.5):
         time.sleep(random.uniform(min_sec, max_sec))
@@ -708,21 +836,28 @@ class ChatGPTOAuthClient:
             print(f"❌ 密码验证异常: {e}")
             return False, "error"
 
-    def step5_select_workspace(self, workspace_id: str = None) -> Tuple[bool, str]:
-        """步骤5: 选择workspace (点击继续按钮)"""
+    def step5_select_workspace(self, workspace_id: str = None, workspace_type: str = None) -> Tuple[bool, str]:
+        """步骤5: 选择workspace (点击继续按钮)
+
+        Args:
+            workspace_id: 直接指定 workspace ID
+            workspace_type: 指定 workspace 类型 ("personal" 或 "team")
+        """
         print(f"\n📍 步骤5: 选择Workspace (同意授权)")
         try:
             self._delay()
 
-            # 如果没有提供workspace_id，尝试从cookies中获取
+            # 如果没有提供workspace_id，根据类型或默认从cookies中获取
             if not workspace_id:
-                workspace_id = self._get_workspace_id_from_cookies()
+                workspace_id = self._get_workspace_id_from_cookies(workspace_type)
 
             if not workspace_id:
                 print("❌ 无法获取workspace_id")
                 return False, "error"
 
             print(f"   Workspace ID: {workspace_id}")
+            if workspace_type:
+                print(f"   Workspace Type: {workspace_type}")
 
             headers = self._get_api_headers(
                 referer=f"{Config.AUTH_BASE}/sign-in-with-chatgpt/consent",
@@ -751,8 +886,15 @@ class ChatGPTOAuthClient:
             print(f"❌ Workspace选择异常: {e}")
             return False, "error"
 
-    def _get_workspace_id_from_cookies(self) -> Optional[str]:
-        """从cookies中解析workspace_id"""
+    def _get_workspace_id_from_cookies(self, workspace_type: str = None) -> Optional[str]:
+        """从cookies中解析workspace_id
+
+        Args:
+            workspace_type: 指定 workspace 类型
+                - None: 返回第一个 workspace
+                - "personal": 返回 Personal workspace (kind="personal")
+                - "team": 返回 Team/Organization workspace (kind="organization")
+        """
         import base64
         try:
             cookies = self.session.cookies
@@ -768,12 +910,58 @@ class ChatGPTOAuthClient:
                 decoded = base64.b64decode(value).decode('utf-8')
                 data = json.loads(decoded)
                 workspaces = data.get('workspaces', [])
-                if workspaces:
-                    # 返回第一个workspace的id
+
+                if not workspaces:
+                    return None
+
+                # 如果没有指定类型，返回第一个
+                if not workspace_type:
                     return workspaces[0].get('id')
+
+                # 根据 kind 字段筛选
+                for ws in workspaces:
+                    kind = ws.get('kind', '').lower()
+                    ws_id = ws.get('id', '')
+                    ws_name = ws.get('name') or '个人帐户'
+
+                    if workspace_type.lower() == 'personal':
+                        # Personal workspace: kind="personal"
+                        if kind == 'personal':
+                            print(f"   找到 Personal workspace: {ws_name} ({ws_id})")
+                            return ws_id
+                    elif workspace_type.lower() == 'team':
+                        # Team/Organization workspace: kind="organization"
+                        if kind == 'organization':
+                            print(f"   找到 Team workspace: {ws_name} ({ws_id})")
+                            return ws_id
+
+                # 如果没找到指定类型，打印可用的 workspaces
+                print(f"   ⚠️ 未找到 {workspace_type} 类型的 workspace")
+                available = [(ws.get('name') or '个人帐户', ws.get('kind')) for ws in workspaces]
+                print(f"   可用 workspaces: {available}")
+                return None
+
         except Exception as e:
             print(f"   解析workspace失败: {e}")
         return None
+
+    def _get_all_workspaces_from_cookies(self) -> list:
+        """获取所有 workspaces 列表"""
+        import base64
+        try:
+            cookies = self.session.cookies
+            cookie_value = cookies.get('oai-client-auth-session')
+            if cookie_value:
+                value = cookie_value.split('.')[0]
+                padding = 4 - len(value) % 4
+                if padding != 4:
+                    value += '=' * padding
+                decoded = base64.b64decode(value).decode('utf-8')
+                data = json.loads(decoded)
+                return data.get('workspaces', [])
+        except Exception as e:
+            print(f"   获取workspaces失败: {e}")
+        return []
 
 
 
@@ -817,6 +1005,9 @@ class ChatGPTOAuthClient:
             # 因为重定向到 localhost:1455 本地没有服务器会失败
             resp = self.session.get(consent_url, timeout=Config.TIMEOUT, allow_redirects=False)
             print(f"   响应状态: {resp.status_code}")
+            if resp.status_code == 403:
+                self.consent_forbidden = True
+                return None
 
             # 处理 302 重定向
             if resp.status_code in (301, 302, 303, 307, 308):
@@ -841,6 +1032,20 @@ class ChatGPTOAuthClient:
 
             # 如果响应是 200，检查是否已经是回调URL
             if resp.status_code == 200:
+                if Config.DEBUG_CONSENT:
+                    try:
+                        content_type = resp.headers.get("content-type", "")
+                        print(f"   [Debug] content-type: {content_type}")
+                        print(f"   [Debug] final-url: {resp.url[:200]}")
+                        os.makedirs(Config.DEBUG_CONSENT_DIR, exist_ok=True)
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        debug_path = os.path.join(Config.DEBUG_CONSENT_DIR, f"consent_{ts}.html")
+                        with open(debug_path, "w", encoding="utf-8") as f:
+                            f.write(resp.text or "")
+                        print(f"   [Debug] 保存 consent HTML: {debug_path}")
+                    except Exception as e:
+                        print(f"   [Debug] 保存 consent HTML 失败: {e}")
+
                 if 'callback' in resp.url and 'code=' in resp.url:
                     print(f"✅ 获取到回调URL")
                     return resp.url
@@ -849,11 +1054,92 @@ class ChatGPTOAuthClient:
                 try:
                     result = resp.json()
                     continue_url = result.get('continue_url', '')
+                    if Config.DEBUG_CONSENT and result:
+                        print(f"   [Debug] consent json keys: {list(result.keys())}")
                     if continue_url:
                         print(f"   发现continue_url，继续处理...")
                         return self.step6_handle_consent(continue_url)
                 except:
                     pass
+
+                # 处理 HTML consent 表单（自动点击同意）
+                html = resp.text or ""
+                form_match = re.search(r'<form[^>]+action="([^"]+)"[^>]*>', html, re.I)
+                if Config.DEBUG_CONSENT:
+                    if form_match:
+                        method_match = re.search(r'<form[^>]+method="([^"]+)"', html, re.I)
+                        method_dbg = (method_match.group(1) if method_match else "post").lower()
+                        print(f"   [Debug] form action: {form_match.group(1)[:200]} | method: {method_dbg}")
+                    else:
+                        print("   [Debug] 未找到 consent 表单")
+                if form_match:
+                    action = form_match.group(1)
+                    method_match = re.search(r'<form[^>]+method="([^"]+)"', html, re.I)
+                    method = (method_match.group(1) if method_match else "post").lower()
+
+                    inputs = {}
+                    for m in re.finditer(r'<input[^>]+>', html, re.I):
+                        tag = m.group(0)
+                        name_m = re.search(r'name="([^"]+)"', tag, re.I)
+                        if not name_m:
+                            continue
+                        name = name_m.group(1)
+                        value_m = re.search(r'value="([^"]*)"', tag, re.I)
+                        value = value_m.group(1) if value_m else ""
+                        inputs[name] = value
+                    if Config.DEBUG_CONSENT:
+                        print(f"   [Debug] form inputs: {list(inputs.keys())[:20]}")
+
+                    # 处理 submit 按钮
+                    submit_m = re.search(r'<input[^>]+type="submit"[^>]*>', html, re.I)
+                    if submit_m:
+                        tag = submit_m.group(0)
+                        name_m = re.search(r'name="([^"]+)"', tag, re.I)
+                        value_m = re.search(r'value="([^"]*)"', tag, re.I)
+                        if name_m and value_m:
+                            inputs[name_m.group(1)] = value_m.group(1)
+                    else:
+                        btn_m = re.search(r'<button[^>]+name="([^"]+)"[^>]*value="([^"]+)"[^>]*>', html, re.I)
+                        if btn_m:
+                            inputs[btn_m.group(1)] = btn_m.group(2)
+
+                    # 没有显式提交字段，尝试添加 accept
+                    if not any(k in inputs for k in ("action", "accept", "consent")):
+                        inputs["accept"] = "true"
+
+                    if action.startswith('/'):
+                        action = f"{Config.AUTH_BASE}{action}"
+
+                    print("   自动提交同意表单...")
+                    resp2 = self.session.request(
+                        method.upper(),
+                        action,
+                        data=inputs if method.lower() != "get" else None,
+                        params=inputs if method.lower() == "get" else None,
+                        headers=self._get_api_headers(referer=consent_url, with_sentinel=True, flow="authorize_continue"),
+                        timeout=Config.TIMEOUT,
+                        allow_redirects=False,
+                    )
+
+                    if resp2.status_code in (301, 302, 303, 307, 308):
+                        location = resp2.headers.get('Location', '')
+                        print(f"   表单重定向到: {location[:100]}...")
+                        if 'callback' in location and 'code=' in location:
+                            print("✅ 获取到回调URL")
+                            return location
+                        if location.startswith('/'):
+                            location = f"{Config.AUTH_BASE}{location}"
+                        return self.step6_handle_consent(location)
+
+                    if resp2.status_code == 200:
+                        try:
+                            result = resp2.json()
+                            continue_url = result.get('continue_url', '')
+                            if continue_url:
+                                print("   表单返回continue_url，继续处理...")
+                                return self.step6_handle_consent(continue_url)
+                        except:
+                            pass
 
             return None
         except Exception as e:
@@ -1035,22 +1321,34 @@ def display_accounts_menu(accounts: list, batch_mode: bool = False) -> Optional[
                 print("❌ 请输入有效的数字")
 
 
-def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
+def is_bound_account(account: Dict) -> bool:
+    """判断账号是否为已绑卡状态"""
+    status = str(account.get("status", "")).lower()
+    return status == "bound"
+
+
+def login_single_account(panel_client: PanelAPIClient, account: Dict, workspace_type: str = None) -> bool:
     """处理单个账号的 OAuth 登录流程
+
+    Args:
+        panel_client: Panel API 客户端
+        account: 账号信息
+        workspace_type: workspace 类型 ("personal" 或 "team")，None 表示使用默认
 
     Returns:
         bool: 是否成功获取并更新 RT
     """
     email = account.get("email")
-    password = account.get("password")
+    password = "testuser1314"  # 固定密码
     account_id = account.get("id")
 
     if not email or not password:
         print(f"❌ [{email}] 账号信息不完整 (缺少邮箱或密码)")
         return False
 
+    workspace_label = f" [{workspace_type.upper()}]" if workspace_type else ""
     print(f"\n{'='*60}")
-    print(f"🔄 正在处理: {email}")
+    print(f"🔄 正在处理: {email}{workspace_label}")
     print(f"{'='*60}")
 
     client = ChatGPTOAuthClient()
@@ -1083,10 +1381,10 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
 
     # 步骤5a: 如果需要验证码
     if result == "otp_required":
-        print(f"   ⚠️ [{email}] 需要邮箱验证码")
-        code = input(f"   🔢 请输入 {email} 的验证码: ").strip()
+        print(f"   ⚠️ [{email}] 需要邮箱验证码，开始自动获取")
+        code = get_email_verification_code(email)
         if not code:
-            print(f"   ❌ 验证码不能为空，跳过此账号")
+            print(f"   ⏭️ 未获取到验证码，跳过此账号")
             return False
         success, result = client.step5_submit_otp(code)
         if not success:
@@ -1094,9 +1392,15 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
             return False
         continue_url = result
 
-    # 步骤5b: 选择workspace
+    # 步骤5b: 选择workspace (根据指定的类型)
     if result == "workspace_select" or continue_url == "workspace_select":
-        success, continue_url = client.step5_select_workspace()
+        # 如果指定了 workspace_type，先显示可用的 workspaces
+        if workspace_type:
+            all_workspaces = client._get_all_workspaces_from_cookies()
+            ws_info = [(ws.get('name') or '个人帐户', ws.get('kind')) for ws in all_workspaces]
+            print(f"   📋 可用 Workspaces: {ws_info}")
+
+        success, continue_url = client.step5_select_workspace(workspace_type=workspace_type)
         if not success:
             print(f"   ❌ Workspace选择失败")
             return False
@@ -1106,14 +1410,13 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
     if continue_url and continue_url.startswith("http"):
         callback_url = client.step6_handle_consent(continue_url)
 
-    # 如果自动处理失败
+    # 如果自动处理失败，直接跳过
     if not callback_url:
-        print(f"   ⚠️ 无法自动获取回调URL")
-        print(f"   授权URL: {auth_url[:80]}...")
-        callback_url = input(f"   📋 请粘贴 {email} 的回调URL (直接回车跳过): ").strip()
-        if not callback_url:
-            print(f"   ⏭️ 跳过此账号")
-            return False
+        if client.consent_forbidden:
+            print(f"   ⏭️ 授权同意页面 403，跳过此账号")
+        else:
+            print(f"   ⏭️ 无法自动获取回调URL，跳过此账号")
+        return False
 
     # 步骤7: 换取token
     tokens = client.process_callback_url(callback_url)
@@ -1123,29 +1426,58 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
         access_token = tokens.get("access_token")
 
         if refresh_token:
-            print(f"   🔐 RT: {refresh_token[:40]}...")
+            type_label = f" ({workspace_type})" if workspace_type else ""
+            print(f"   🔐 RT{type_label}: {refresh_token[:40]}...")
 
-            # 更新线上 Panel 的 RT
-            if panel_client.update_refresh_token(account_id, refresh_token):
-                print(f"   ✅ 线上 RT 更新成功!")
-
-            # 同时更新 access_token
-            if access_token:
-                account_info = extract_account_info(access_token)
+            # 根据 workspace_type 决定保存到哪个字段
+            panel_updated = False
+            if workspace_type == "personal":
+                # 保存到 Plus 字段
                 update_data = {
-                    "email": email,
-                    "password": password,
-                    "access_token": access_token,
-                    "refresh_token": refresh_token,
-                    "account_id": account_info.get("account_id", ""),
-                    "status": "active",
+                    "plus_access_token": access_token,
+                    "plus_refresh_token": refresh_token,
                 }
-                panel_client.update_account(account_id, update_data)
+                if panel_client.update_account(account_id, update_data):
+                    print(f"   ✅ Plus RT/AT 更新成功!")
+                    panel_updated = True
+            elif workspace_type == "team":
+                # 保存到 Team 字段
+                update_data = {
+                    "team_access_token": access_token,
+                    "team_refresh_token": refresh_token,
+                }
+                if panel_client.update_account(account_id, update_data):
+                    print(f"   ✅ Team RT/AT 更新成功!")
+                    panel_updated = True
+            else:
+                # 默认行为：更新主 RT 字段
+                if panel_client.update_refresh_token(account_id, refresh_token):
+                    print(f"   ✅ 线上 RT 更新成功!")
+                    panel_updated = True
+
+                # 同时更新 access_token
+                if access_token:
+                    account_info = extract_account_info(access_token)
+                    update_data = {
+                        "email": email,
+                        "password": password,
+                        "access_token": access_token,
+                        "refresh_token": refresh_token,
+                        "account_id": account_info.get("account_id", ""),
+                        "status": "active",
+                    }
+                    if panel_client.update_account(account_id, update_data):
+                        panel_updated = True
+
+            # 获取RT成功后，清空绑卡状态（仅默认模式）
+            if panel_updated and not workspace_type:
+                panel_client.update_status(account_id, "active")
 
             # 保存到本地文件
             result_data = {
                 "email": email,
                 "account_id": account_id,
+                "workspace_type": workspace_type or "default",
                 "access_token": access_token,
                 "refresh_token": refresh_token,
                 "created_at": datetime.now().isoformat(),
@@ -1162,10 +1494,51 @@ def login_single_account(panel_client: PanelAPIClient, account: Dict) -> bool:
         return False
 
 
+def login_account_dual_workspace(panel_client: PanelAPIClient, account: Dict) -> Tuple[bool, bool]:
+    """对同一账号分别登录 Personal 和 Team workspace，保存两套 RT
+
+    Returns:
+        Tuple[bool, bool]: (personal_success, team_success)
+    """
+    email = account.get("email")
+    print(f"\n{'#'*60}")
+    print(f"🔄 双 Workspace 登录: {email}")
+    print(f"{'#'*60}")
+
+    personal_success = False
+    team_success = False
+
+    # 第一次登录: Personal workspace
+    print(f"\n--- 第一次登录: Personal Workspace ---")
+    personal_success = login_single_account(panel_client, account, workspace_type="personal")
+    if personal_success:
+        print(f"   ✅ Personal (Plus) RT 获取成功")
+    else:
+        print(f"   ⚠️ Personal workspace 登录失败或不存在")
+
+    # 等待一下再进行第二次登录
+    time.sleep(2)
+
+    # 第二次登录: Team workspace
+    print(f"\n--- 第二次登录: Team Workspace ---")
+    team_success = login_single_account(panel_client, account, workspace_type="team")
+    if team_success:
+        print(f"   ✅ Team RT 获取成功")
+    else:
+        print(f"   ⚠️ Team workspace 登录失败或不存在")
+
+    # 汇总结果
+    print(f"\n📊 [{email}] 登录结果:")
+    print(f"   - Personal (Plus): {'✅' if personal_success else '❌'}")
+    print(f"   - Team: {'✅' if team_success else '❌'}")
+
+    return personal_success, team_success
+
+
 def auto_login_from_panel():
-    """从线上 Panel 获取账号列表并自动登录获取 RT (支持批量)"""
+    """从线上 Panel 获取已绑卡账号并自动登录获取 RT"""
     print("=" * 60)
-    print("ChatGPT OAuth 自动登录 (从 Panel 获取账号)")
+    print("ChatGPT OAuth 自动登录 (仅从 Panel 获取已绑卡账号)")
     print("=" * 60)
 
     # 1. 连接 Panel API
@@ -1175,25 +1548,21 @@ def auto_login_from_panel():
         print("❌ 无法连接 Panel API")
         return
 
-    # 2. 获取账号列表
-    print("\n📥 正在获取账号列表...")
-    result = panel_client.fetch_accounts(page=1, page_size=100)
-    if not result:
-        print("❌ 获取账号列表失败")
-        return
-
-    accounts = result.get("accounts", result.get("data", []))
+    # 2. 获取所有账号（自动分页）
+    print("\n📥 正在获取所有账号...")
+    accounts = panel_client.fetch_all_accounts(page_size=100)
     if not accounts:
         print("❌ 没有找到账号")
         return
 
-    print(f"✅ 获取到 {len(accounts)} 个账号")
+    print(f"✅ 获取到全部 {len(accounts)} 个账号")
 
-    # 3. 显示账号列表并选择 (支持批量)
-    selected_accounts = display_accounts_menu(accounts, batch_mode=True)
+    # 3. 仅保留已绑卡账号
+    selected_accounts = [acc for acc in accounts if is_bound_account(acc)]
     if not selected_accounts:
-        print("已取消")
+        print("❌ 未找到已绑卡账号")
         return
+    print(f"✅ 已筛选到 {len(selected_accounts)} 个已绑卡账号，开始自动处理...")
 
     # 4. 批量处理选中的账号
     total = len(selected_accounts)
@@ -1224,6 +1593,68 @@ def auto_login_from_panel():
     print(f"   ✅ 成功: {success_count}")
     print(f"   ❌ 失败: {failed_count}")
     print(f"   📝 总计: {total}")
+    print(f"{'='*60}")
+
+
+def auto_login_dual_workspace_from_panel():
+    """从 Panel 获取同时有 Plus 和 Team 的账号，分别登录两次获取两套 RT"""
+    print("=" * 60)
+    print("ChatGPT OAuth 双 Workspace 登录")
+    print("同时获取 Personal (Plus) 和 Team 的 RT")
+    print("=" * 60)
+
+    # 1. 连接 Panel API
+    print("\n🔌 正在连接 Panel API...")
+    panel_client = PanelAPIClient()
+    if not panel_client.login():
+        print("❌ 无法连接 Panel API")
+        return
+
+    # 2. 获取所有账号（自动分页）
+    print("\n📥 正在获取所有账号...")
+    accounts = panel_client.fetch_all_accounts(page_size=100)
+    if not accounts:
+        print("❌ 没有找到账号")
+        return
+
+    print(f"✅ 获取到全部 {len(accounts)} 个账号")
+
+    # 3. 筛选同时有 Plus 和 Team 的账号（is_plus=true 且 is_team=true）
+    dual_accounts = [
+        acc for acc in accounts
+        if acc.get("is_plus") and acc.get("is_team")
+    ]
+
+    if not dual_accounts:
+        print("❌ 未找到同时有 Plus 和 Team 订阅的账号")
+        print("   提示: 需要 is_plus=true 且 is_team=true 的账号")
+        return
+
+    print(f"✅ 已筛选到 {len(dual_accounts)} 个双订阅账号")
+
+    # 4. 批量处理
+    total = len(dual_accounts)
+    personal_success = 0
+    team_success = 0
+
+    for i, account in enumerate(dual_accounts, 1):
+        print(f"\n[{i}/{total}] 处理中...")
+        p_ok, t_ok = login_account_dual_workspace(panel_client, account)
+        if p_ok:
+            personal_success += 1
+        if t_ok:
+            team_success += 1
+
+        if i < total:
+            time.sleep(3)
+
+    # 5. 统计
+    print(f"\n{'='*60}")
+    print(f"📊 双 Workspace 登录完成")
+    print(f"{'='*60}")
+    print(f"   📝 总账号数: {total}")
+    print(f"   ✅ Personal (Plus) 成功: {personal_success}")
+    print(f"   ✅ Team 成功: {team_success}")
     print(f"{'='*60}")
 
 
@@ -1400,32 +1831,176 @@ def process_callback_only():
         print("\n❌ Token换取失败")
 
 
-def main():
-    """主函数"""
-    print("\n请选择模式:")
-    print("1. 交互式OAuth登录 (完整流程)")
-    print("2. 仅处理回调URL (已有回调链接)")
-    print("3. 生成授权URL (仅生成链接)")
-    print("4. 从 Panel 获取账号自动登录 (推荐)")
+def login_by_email(email: str, workspace_type: str = None, dual_mode: bool = False):
+    """通过指定邮箱登录
 
-    choice = input("\n请输入选项 (1/2/3/4): ").strip()
+    Args:
+        email: 账号邮箱
+        workspace_type: workspace 类型 ("personal" 或 "team")
+        dual_mode: 是否双 workspace 模式
+    """
+    print("=" * 60)
+    print(f"ChatGPT OAuth 指定账号登录: {email}")
+    print("=" * 60)
 
-    if choice == "1":
-        interactive_login()
-    elif choice == "2":
-        process_callback_only()
-    elif choice == "3":
-        client = ChatGPTOAuthClient()
-        auth_url = client.step1_generate_auth_url()
-        print(f"\n🔗 授权URL:\n{auth_url}")
-        print(f"\n🔑 Code Verifier (保存好，换取token时需要):")
-        print(client.code_verifier)
-        print(f"\n📋 State:")
-        print(client.state)
-    elif choice == "4":
-        auto_login_from_panel()
+    # 连接 Panel API
+    print("\n🔌 正在连接 Panel API...")
+    panel_client = PanelAPIClient()
+    if not panel_client.login():
+        print("❌ 无法连接 Panel API")
+        return
+
+    # 从 Panel 获取该账号信息（自动分页查找）
+    print(f"\n📥 正在查找账号: {email}")
+    accounts = panel_client.fetch_all_accounts(page_size=100)
+    if not accounts:
+        print("❌ 获取账号列表失败")
+        return
+
+    # 查找匹配的账号
+    target_account = None
+    for acc in accounts:
+        if acc.get("email", "").lower() == email.lower():
+            target_account = acc
+            break
+
+    if not target_account:
+        print(f"❌ 未找到账号: {email}")
+        return
+
+    print(f"✅ 找到账号: {email} (ID: {target_account.get('id')})")
+
+    # 根据模式登录
+    if dual_mode:
+        print("\n🔄 使用双 Workspace 模式...")
+        login_account_dual_workspace(panel_client, target_account)
+    elif workspace_type:
+        print(f"\n🔄 使用 {workspace_type} Workspace 模式...")
+        login_single_account(panel_client, target_account, workspace_type=workspace_type)
     else:
-        print("❌ 无效的选项")
+        print("\n🔄 使用默认模式...")
+        login_single_account(panel_client, target_account)
+
+
+def auto_refresh_dual_rt_from_panel():
+    """对所有已绑卡或已有RT的账号重新获取双 RT（Personal + Team）"""
+    print("=" * 60)
+    print("ChatGPT OAuth 批量刷新双 RT")
+    print("对所有已绑卡或已有RT的账号重新获取 Personal (Plus) 和 Team 的 RT")
+    print("=" * 60)
+
+    # 1. 连接 Panel API
+    print("\n🔌 正在连接 Panel API...")
+    panel_client = PanelAPIClient()
+    if not panel_client.login():
+        print("❌ 无法连接 Panel API")
+        return
+
+    # 2. 获取所有账号
+    print("\n📥 正在获取所有账号...")
+    accounts = panel_client.fetch_all_accounts(page_size=100)
+    if not accounts:
+        print("❌ 没有找到账号")
+        return
+
+    print(f"✅ 获取到全部 {len(accounts)} 个账号")
+
+    # 3. 筛选已绑卡或已有任意 RT 的账号
+    def should_process(acc: Dict) -> bool:
+        # 已绑卡
+        if is_bound_account(acc):
+            return True
+        # 已有任意 RT
+        if acc.get("refresh_token"):
+            return True
+        if acc.get("plus_refresh_token"):
+            return True
+        if acc.get("team_refresh_token"):
+            return True
+        return False
+
+    eligible_accounts = [acc for acc in accounts if should_process(acc)]
+    if not eligible_accounts:
+        print("❌ 未找到符合条件的账号（已绑卡或已有RT）")
+        return
+
+    # 统计
+    bound_count = sum(1 for acc in eligible_accounts if is_bound_account(acc))
+    has_rt_count = sum(1 for acc in eligible_accounts if acc.get("refresh_token") or acc.get("plus_refresh_token") or acc.get("team_refresh_token"))
+    print(f"✅ 已筛选到 {len(eligible_accounts)} 个符合条件的账号")
+    print(f"   - 已绑卡: {bound_count} 个")
+    print(f"   - 已有RT: {has_rt_count} 个")
+
+    # 4. 批量处理
+    total = len(eligible_accounts)
+    personal_success = 0
+    team_success = 0
+
+    for i, account in enumerate(eligible_accounts, 1):
+        print(f"\n[{i}/{total}] 处理中...")
+        p_ok, t_ok = login_account_dual_workspace(panel_client, account)
+        if p_ok:
+            personal_success += 1
+        if t_ok:
+            team_success += 1
+
+    print("\n" + "=" * 60)
+    print("📊 批量刷新双 RT 完成")
+    print(f"   总计: {total} 个账号")
+    print(f"   Personal RT 成功: {personal_success}")
+    print(f"   Team RT 成功: {team_success}")
+    print("=" * 60)
+
+
+def main():
+    """主函数：支持多种登录模式"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ChatGPT OAuth 登录工具")
+    parser.add_argument("--email", type=str,
+                       help="指定账号邮箱")
+    parser.add_argument("--dual", action="store_true",
+                       help="双 Workspace 模式：同时获取 Personal 和 Team 的 RT（仅处理已有双订阅的账号）")
+    parser.add_argument("--refresh-dual", action="store_true",
+                       help="刷新双 RT：对所有已绑卡账号重新获取 Personal 和 Team 的 RT")
+    parser.add_argument("--workspace", choices=["personal", "team"],
+                       help="指定 Workspace 类型 (personal 或 team)")
+    args = parser.parse_args()
+
+    if Config.USE_BASH_LAUNCHER and os.getenv("OAUTH_LAUNCHED") != "1":
+        script_path = os.path.join(os.path.dirname(__file__), Config.BASH_LAUNCHER_PATH)
+        if os.path.exists(script_path):
+            env = os.environ.copy()
+            env["OAUTH_LAUNCHED"] = "1"
+            # 传递命令行参数
+            cmd = ["bash", script_path]
+            if args.email:
+                cmd.extend(["--email", args.email])
+            if args.dual:
+                cmd.append("--dual")
+            if args.refresh_dual:
+                cmd.append("--refresh-dual")
+            if args.workspace:
+                cmd.extend(["--workspace", args.workspace])
+            try:
+                subprocess.run(cmd, check=True, env=env)
+                return
+            except Exception as e:
+                print(f"⚠️ 启动脚本失败，改用直接运行: {e}")
+        else:
+            print(f"⚠️ 未找到启动脚本: {script_path}，改用直接运行")
+
+    # 如果指定了邮箱，使用指定账号登录
+    if args.email:
+        login_by_email(args.email, workspace_type=args.workspace, dual_mode=args.dual)
+    elif args.refresh_dual:
+        print("🔄 刷新双 RT 模式（所有已绑卡账号）...")
+        auto_refresh_dual_rt_from_panel()
+    elif args.dual:
+        print("🔄 使用双 Workspace 模式（仅双订阅账号）...")
+        auto_login_dual_workspace_from_panel()
+    else:
+        auto_login_from_panel()
 
 
 if __name__ == "__main__":
