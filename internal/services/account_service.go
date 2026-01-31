@@ -209,9 +209,9 @@ func (s *AccountService) List(filter models.AccountFilter) (*models.PaginatedRes
 		query = query.Where("email LIKE ?", "%@"+filter.Domain)
 	}
 	if filter.HasRT == "yes" {
-		query = query.Where("refresh_token IS NOT NULL AND refresh_token != ''")
+		query = query.Where("(refresh_token IS NOT NULL AND refresh_token != '') OR (plus_refresh_token IS NOT NULL AND plus_refresh_token != '') OR (team_refresh_token IS NOT NULL AND team_refresh_token != '')")
 	} else if filter.HasRT == "no" {
-		query = query.Where("refresh_token IS NULL OR refresh_token = ''")
+		query = query.Where("(refresh_token IS NULL OR refresh_token = '') AND (plus_refresh_token IS NULL OR plus_refresh_token = '') AND (team_refresh_token IS NULL OR team_refresh_token = '')")
 	}
 	if filter.CliproxySynced == "yes" {
 		query = query.Where("cliproxy_synced = ?", true)

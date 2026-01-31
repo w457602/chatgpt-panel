@@ -77,6 +77,10 @@
             <!-- 快捷操作 -->
             <div class="bg-white rounded-lg shadow p-4 mb-6 flex flex-wrap items-center gap-3">
                 <button @click="openImportModal" class="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600">导入账号</button>
+                <button @click="exportSelectedToFile" :disabled="selectedIds.length === 0 || exporting" class="bg-teal-500 text-white px-3 py-1 rounded hover:bg-teal-600 disabled:opacity-50">
+                    <i class="fas" :class="exporting ? 'fa-spinner fa-spin' : 'fa-download'"></i>
+                    <span x-text="exporting ? '导出中...' : `导出选中 (${selectedIds.length})`"></span>
+                </button>
                 <button @click="openInviteModal" class="bg-sky-500 text-white px-3 py-1 rounded hover:bg-sky-600">邀请码管理</button>
                 <button @click="openRedemptionModal" class="bg-orange-500 text-white px-3 py-1 rounded hover:bg-orange-600">兑换码管理</button>
                 <button @click="openSystemConfigModal" class="bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600">系统设置</button>
@@ -162,8 +166,16 @@
                                     <span x-show="!account.is_demoted" class="text-gray-300"><i class="fas fa-minus"></i></span>
                                 </td>
                                 <td class="px-4 py-3">
-                                    <span x-show="account.refresh_token" class="text-green-500"><i class="fas fa-check"></i></span>
-                                    <span x-show="!account.refresh_token" class="text-gray-300"><i class="fas fa-times"></i></span>
+                                    <div class="flex gap-1">
+                                        <!-- Plus RT 状态 -->
+                                        <span x-show="account.plus_refresh_token" class="px-2 py-1 text-xs rounded bg-blue-100 text-blue-700">Plus✓</span>
+                                        <span x-show="!account.plus_refresh_token && (account.plus_bound || account.is_plus)" class="px-2 py-1 text-xs rounded bg-blue-50 text-blue-400">Plus✗</span>
+                                        <!-- Team RT 状态 -->
+                                        <span x-show="account.team_refresh_token" class="px-2 py-1 text-xs rounded bg-purple-100 text-purple-700">Team✓</span>
+                                        <span x-show="!account.team_refresh_token && (account.team_bound || account.is_team)" class="px-2 py-1 text-xs rounded bg-purple-50 text-purple-400">Team✗</span>
+                                        <!-- 无任何 RT -->
+                                        <span x-show="!account.refresh_token && !account.plus_refresh_token && !account.team_refresh_token && !account.plus_bound && !account.team_bound && !account.is_plus && !account.is_team" class="text-gray-300">-</span>
+                                    </div>
                                 </td>
                                 <td class="px-4 py-3">
                                     <div class="flex gap-1">
@@ -190,7 +202,7 @@
                                         <button @click="refreshToken(account)" class="text-green-500 hover:text-green-700" title="刷新Token" x-show="account.refresh_token">
                                             <i class="fas fa-sync-alt"></i>
                                         </button>
-                                        <button @click="syncCliproxyAccount(account)" class="text-indigo-500 hover:text-indigo-700" :class="(!account.refresh_token || account.syncing) ? 'opacity-50 pointer-events-none' : ''" title="同步到 CLIProxyAPI">
+                                        <button @click="syncCliproxyAccount(account)" class="text-indigo-500 hover:text-indigo-700" :class="((!account.refresh_token && !account.plus_refresh_token && !account.team_refresh_token) || account.syncing) ? 'opacity-50 pointer-events-none' : ''" title="同步到 CLIProxyAPI">
                                             <i class="fas" :class="account.syncing ? 'fa-spinner fa-spin' : 'fa-cloud-arrow-up'"></i>
                                         </button>
                                         <button @click="refreshSubscription(account)" class="text-orange-500 hover:text-orange-700" title="刷新订阅状态" x-show="account.access_token || account.plus_access_token || account.team_access_token">
@@ -214,8 +226,13 @@
                     <div class="text-sm text-gray-600">
                         共 <span x-text="pagination.total"></span> 条，第 <span x-text="pagination.page"></span>/<span x-text="pagination.total_pages"></span> 页
                     </div>
-                    <div class="flex gap-2">
+                    <div class="flex gap-2 items-center">
                         <button @click="prevPage" :disabled="pagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-50">上一页</button>
+                        <div class="flex items-center gap-1">
+                            <span class="text-sm text-gray-500">跳转</span>
+                            <input type="number" x-model.number="jumpPage" min="1" :max="pagination.total_pages" @keydown.enter="goToPage(jumpPage)" class="w-16 px-2 py-1 border rounded text-center text-sm" placeholder="#">
+                            <button @click="goToPage(jumpPage)" class="px-2 py-1 border rounded text-sm hover:bg-gray-100">GO</button>
+                        </div>
                         <button @click="nextPage" :disabled="pagination.page >= pagination.total_pages" class="px-3 py-1 border rounded disabled:opacity-50">下一页</button>
                     </div>
                 </div>
@@ -767,6 +784,8 @@
                     total_pages: 0
                 },
                 refreshingSubscriptions: false,
+                jumpPage: 1,
+                exporting: false,
 
                 async init() {
                     if (this.token) {
@@ -877,6 +896,12 @@
 
                 prevPage() { if (this.filter.page > 1) { this.filter.page--; this.loadAccounts(); } },
                 nextPage() { if (this.filter.page < this.pagination.total_pages) { this.filter.page++; this.loadAccounts(); } },
+                goToPage(page) {
+                    page = parseInt(page);
+                    if (isNaN(page) || page < 1 || page > this.pagination.total_pages) return;
+                    this.filter.page = page;
+                    this.loadAccounts();
+                },
 
                 get isAllSelected() { return this.accounts.length > 0 && this.selectedIds.length === this.accounts.length; },
                 toggleSelectAll(e) { this.selectedIds = e.target.checked ? this.accounts.map(a => a.id) : []; },
@@ -909,6 +934,79 @@
                     this.selectedIds = [];
                     this.loadAccounts();
                     this.loadStats();
+                },
+
+                async exportSelectedToFile() {
+                    if (this.selectedIds.length === 0) return;
+                    this.exporting = true;
+                    try {
+                        // 获取选中的账号数据
+                        const selectedAccounts = this.accounts.filter(a => this.selectedIds.includes(a.id));
+                        const lines = [];
+                        const now = new Date().toISOString();
+
+                        for (const acc of selectedAccounts) {
+                            // Plus RT
+                            if (acc.plus_refresh_token) {
+                                lines.push(JSON.stringify({
+                                    id_token: '',
+                                    access_token: acc.plus_access_token || '',
+                                    refresh_token: acc.plus_refresh_token,
+                                    account_id: acc.account_id || '',
+                                    last_refresh: now,
+                                    email: acc.email,
+                                    type: 'plus',
+                                    expired: false
+                                }));
+                            }
+                            // Team RT
+                            if (acc.team_refresh_token) {
+                                lines.push(JSON.stringify({
+                                    id_token: '',
+                                    access_token: acc.team_access_token || '',
+                                    refresh_token: acc.team_refresh_token,
+                                    account_id: acc.account_id || '',
+                                    last_refresh: now,
+                                    email: acc.email,
+                                    type: 'team',
+                                    expired: false
+                                }));
+                            }
+                            // 如果只有旧的 refresh_token
+                            if (!acc.plus_refresh_token && !acc.team_refresh_token && acc.refresh_token) {
+                                lines.push(JSON.stringify({
+                                    id_token: '',
+                                    access_token: acc.access_token || '',
+                                    refresh_token: acc.refresh_token,
+                                    account_id: acc.account_id || '',
+                                    last_refresh: now,
+                                    email: acc.email,
+                                    type: acc.is_team ? 'team' : (acc.is_plus ? 'plus' : 'free'),
+                                    expired: false
+                                }));
+                            }
+                        }
+
+                        if (lines.length === 0) {
+                            alert('选中的账号没有可导出的 Refresh Token');
+                            return;
+                        }
+
+                        // 生成文件并下载
+                        const content = lines.join('\n');
+                        const blob = new Blob([content], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        const timestamp = new Date().toISOString().replace(/[:\-T]/g, '').slice(0, 14);
+                        a.href = url;
+                        a.download = `export_cliproxy_${timestamp}.json`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                    } finally {
+                        this.exporting = false;
+                    }
                 },
 
                 viewAccount(account) { this.currentAccount = account; this.showModal = true; },
@@ -1228,18 +1326,17 @@
 
                 async syncCliproxyAccount(account) {
                     if (!account?.id) return;
-                    if (!account.refresh_token) {
-                        alert('账号无 refresh_token，无法同步');
+                    if (!account.refresh_token && !account.plus_refresh_token && !account.team_refresh_token) {
+                        alert('账号无可用 refresh_token，无法同步');
                         return;
                     }
-                    if (!confirm(`确定同步 ${account.email} 到 CLIProxyAPI？`)) return;
                     account.syncing = true;
                     try {
                         const res = await this.api(`/api/v1/accounts/${account.id}/cliproxy-sync`, { method: 'POST' });
                         if (res?.error) {
                             alert('同步失败: ' + res.error);
                         } else {
-                            alert(res?.message || '同步成功');
+                            // 成功时静默刷新，不弹窗
                             await this.loadAccounts();
                             await this.loadStats();
                         }

@@ -44,21 +44,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 		return
 	}
 
-	if accounts, ok := result.Data.([]models.Account); ok && len(accounts) > 0 {
-		cliproxy := services.GetCliproxySyncService()
-		if cliproxy.Enabled() {
-			if remote, err := cliproxy.RemoteAuthFileNames(c.Request.Context()); err == nil {
-				for i := range accounts {
-					accounts[i].CliproxySynced = cliproxy.RemoteHasAccount(remote, &accounts[i])
-					if !accounts[i].CliproxySynced {
-						accounts[i].CliproxySyncedAt = nil
-					}
-				}
-				result.Data = accounts
-			}
-		}
-	}
-
+	// 直接使用数据库中的 cliproxy_synced 字段，不再从远程 CLIProxyAPI 查询
 	c.JSON(http.StatusOK, result)
 }
 
@@ -392,7 +378,7 @@ func (h *AccountHandler) Import(c *gin.Context) {
 
 func (h *AccountHandler) SyncCliproxy(c *gin.Context) {
 	var accounts []models.Account
-	if err := models.GetDB().Where("refresh_token IS NOT NULL AND refresh_token != ''").Find(&accounts).Error; err != nil {
+	if err := models.GetDB().Where("(refresh_token IS NOT NULL AND refresh_token != '') OR (plus_refresh_token IS NOT NULL AND plus_refresh_token != '') OR (team_refresh_token IS NOT NULL AND team_refresh_token != '')").Find(&accounts).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -407,6 +393,9 @@ func (h *AccountHandler) SyncCliproxy(c *gin.Context) {
 	for _, account := range accounts {
 		accountCopy := account
 		if !services.GetCliproxySyncService().Eligible(&accountCopy) {
+			continue
+		}
+		if !services.GetCliproxySyncService().HasSyncableTokens(&accountCopy) {
 			continue
 		}
 		if err := services.GetCliproxySyncService().SyncAccount(c.Request.Context(), &accountCopy); err != nil {
@@ -445,8 +434,8 @@ func (h *AccountHandler) SyncCliproxyAccount(c *gin.Context) {
 		return
 	}
 
-	if strings.TrimSpace(account.RefreshToken) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "账号无 refresh_token"})
+	if !services.GetCliproxySyncService().HasSyncableTokens(account) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "账号无可用 refresh_token"})
 		return
 	}
 
@@ -1085,10 +1074,10 @@ func (h *AccountHandler) RefreshAllSubscriptions(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":     "批量刷新完成",
-		"total":       len(accounts),
-		"updated":     updated,
-		"plus_count":  plusCount,
-		"team_count":  teamCount,
+		"message":    "批量刷新完成",
+		"total":      len(accounts),
+		"updated":    updated,
+		"plus_count": plusCount,
+		"team_count": teamCount,
 	})
 }

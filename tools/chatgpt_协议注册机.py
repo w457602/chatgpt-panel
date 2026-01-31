@@ -129,7 +129,8 @@ class Config:
     CLASH_INCLUDE_KEYWORDS = ["美国", "🇺🇸"]  # 只包含美国节点
     CLASH_EXCLUDE_KEYWORDS = [
         "剩余流量", "距离下次重置", "套餐到期", "建议",  # 排除信息节点
-        "DIRECT", "REJECT"  # 排除系统节点
+        "DIRECT", "REJECT",  # 排除系统节点
+        "IPLC"  # 跳过 IPLC 节点
     ]
     CLASH_SWITCH_INTERVAL = 5  # 每注册成功多少个切换一次节点
 
@@ -1128,19 +1129,24 @@ class ChatGPTRegisterClient:
             print(f"⚠️ 获取 Access Token 失败: {e}")
             return None
 
-    def generate_checkout_url(self, access_token: str, workspace_name: str = "MyTeam") -> Tuple[Optional[str], Optional[str]]:
+    def generate_checkout_url(self, access_token: str, workspace_name: str = "MyTeam") -> Tuple[Optional[str], int, Optional[str], int]:
         """生成 Plus 和 Team(Business) 订阅支付链接
 
         Returns:
-            Tuple[Optional[str], Optional[str]]: (plus_url, team_url)
+            Tuple[Optional[str], int, Optional[str], int]: (plus_url, plus_amount, team_url, team_amount)
+            金额以分为单位，0 表示免费，-1 表示获取失败
         """
         print(f"\n📍 生成绑卡链接...")
-        plus_url = self._create_checkout_and_get_stripe_url(access_token, "plus")
-        team_url = self._create_checkout_and_get_stripe_url(access_token, "team", workspace_name)
-        return (plus_url, team_url)
+        plus_url, plus_amount = self._create_checkout_and_get_stripe_url(access_token, "plus")
+        team_url, team_amount = self._create_checkout_and_get_stripe_url(access_token, "team", workspace_name)
+        return (plus_url, plus_amount, team_url, team_amount)
 
-    def _create_checkout_and_get_stripe_url(self, access_token: str, plan_type: str = "plus", workspace_name: str = "MyTeam") -> Optional[str]:
-        """创建 Checkout Session 并获取 Stripe 直链 (custom 模式)"""
+    def _create_checkout_and_get_stripe_url(self, access_token: str, plan_type: str = "plus", workspace_name: str = "MyTeam") -> Tuple[Optional[str], int]:
+        """创建 Checkout Session 并获取 Stripe 直链 (custom 模式)
+
+        Returns:
+            Tuple[Optional[str], int]: (stripe_url, amount_cents) - 金额以分为单位，-1 表示获取失败
+        """
         plan_name = "Plus" if plan_type == "plus" else "Team"
         print(f"   📍 创建 {plan_name} Checkout Session (custom)...")
         try:
@@ -1198,13 +1204,17 @@ class ChatGPTRegisterClient:
                 print(f"      ❌ 响应中无 session_id: {data}")
             else:
                 print(f"      ❌ 创建失败: {resp.status_code} - {resp.text[:200]}")
-            return None
+            return None, -1
         except Exception as e:
             print(f"      ❌ 创建异常: {e}")
-            return None
+            return None, -1
 
-    def _get_stripe_hosted_url(self, session_id: str, publishable_key: str, plan_name: str) -> Optional[str]:
-        """从 Stripe init API 获取 stripe_hosted_url"""
+    def _get_stripe_hosted_url(self, session_id: str, publishable_key: str, plan_name: str) -> Tuple[Optional[str], int]:
+        """从 Stripe init API 获取 stripe_hosted_url
+
+        Returns:
+            Tuple[Optional[str], int]: (stripe_url, amount_cents) - 金额以分为单位，-1 表示获取失败
+        """
         print(f"      📍 获取 {plan_name} Stripe 直链...")
         try:
             url = f"https://api.stripe.com/v1/payment_pages/{session_id}?key={publishable_key}"
@@ -1219,14 +1229,14 @@ class ChatGPTRegisterClient:
                         print(f"      ✅ {plan_name} 直链 ($0): {stripe_url[:60]}...")
                     else:
                         print(f"      ⚠️ {plan_name} 直链 (${total/100}): {stripe_url[:60]}...")
-                    return stripe_url
+                    return stripe_url, total
                 print(f"      ❌ 响应中无 stripe_hosted_url")
             else:
                 print(f"      ❌ Stripe API 失败: {resp.status_code}")
-            return None
+            return None, -1
         except Exception as e:
             print(f"      ❌ Stripe API 异常: {e}")
-            return None
+            return None, -1
 
 
 # ============================================================================
@@ -1361,10 +1371,20 @@ class ChatGPTRegister:
             subscription_status = extract_subscription_from_token(access_token) if access_token else "free"
             print(f"{prefix} 📊 订阅状态: {subscription_status}")
 
-            # 获取绑卡链接（Plus 和 Team）
-            checkout_url, team_checkout_url = None, None
+            # 获取绑卡链接（Plus 和 Team）及金额
+            checkout_url, plus_amount, team_checkout_url, team_amount = None, -1, None, -1
             if access_token:
-                checkout_url, team_checkout_url = client.generate_checkout_url(access_token)
+                checkout_url, plus_amount, team_checkout_url, team_amount = client.generate_checkout_url(access_token)
+
+            # 判断金额：只有 $0 的账号才算成功，$20 或 $150 视为失败
+            # plus_amount 和 team_amount 以分为单位，0 = $0，2000 = $20，15000 = $150
+            if plus_amount != 0:
+                # Plus 链接金额不是 $0，视为注册失败
+                amount_display = f"${plus_amount/100}" if plus_amount > 0 else "获取失败"
+                with self.lock:
+                    self.fail_count += 1
+                print(f"\n{prefix} ❌ 绑卡金额不是 $0 ({amount_display})，视为注册失败，跳过保存")
+                return None
 
             # 保存结果 - 兼容目标格式
             now_time = datetime.now().isoformat()
@@ -1398,7 +1418,7 @@ class ChatGPTRegister:
             if should_switch and self.proxy_switcher:
                 self.proxy_switcher.switch_next()
 
-            print(f"\n{prefix} ✅ 注册成功! (当前成功: {current_success})")
+            print(f"\n{prefix} ✅ 注册成功! 绑卡金额 $0 (当前成功: {current_success})")
             if checkout_url:
                 print(f"{prefix} 💳 Plus 绑卡链接: {checkout_url[:60]}...")
             if team_checkout_url:

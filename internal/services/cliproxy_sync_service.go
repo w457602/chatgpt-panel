@@ -44,6 +44,12 @@ type CliproxySyncService struct {
 	remoteCache   map[string]struct{}
 }
 
+type cliproxyAuthSource struct {
+	label        string
+	accessToken  string
+	refreshToken string
+}
+
 var (
 	cliproxyOnce    sync.Once
 	cliproxyService *CliproxySyncService
@@ -85,6 +91,13 @@ func (s *CliproxySyncService) Enabled() bool {
 	return s != nil && s.enabled
 }
 
+func (s *CliproxySyncService) HasSyncableTokens(account *models.Account) bool {
+	if s == nil || account == nil {
+		return false
+	}
+	return len(s.authSources(account)) > 0
+}
+
 func (s *CliproxySyncService) Enqueue(account *models.Account) {
 	if s == nil || account == nil {
 		return
@@ -104,7 +117,8 @@ func (s *CliproxySyncService) SyncAccount(ctx context.Context, account *models.A
 	if !s.Eligible(account) {
 		return nil
 	}
-	if strings.TrimSpace(account.RefreshToken) == "" {
+	sources := s.authSources(account)
+	if len(sources) == 0 {
 		return nil
 	}
 	if ctx == nil {
@@ -116,34 +130,33 @@ func (s *CliproxySyncService) SyncAccount(ctx context.Context, account *models.A
 		defer cancel()
 	}
 
-	payload, err := s.buildPayload(account)
-	if err != nil {
-		return err
+	accountID := strings.TrimSpace(account.AccountID)
+	if accountID == "" {
+		for _, source := range sources {
+			if source.accessToken == "" {
+				continue
+			}
+			if id := extractAccountIDFromAccessToken(source.accessToken); id != "" {
+				accountID = id
+				break
+			}
+		}
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("cliproxy payload marshal failed: %w", err)
+	if accountID == "" {
+		return errors.New("cliproxy payload missing account_id")
 	}
+	account.AccountID = accountID
 
-	reqURL := fmt.Sprintf("%s/v0/management/auth-files?name=%s", s.baseURL, url.QueryEscape(s.buildFileName(account)))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("cliproxy request build failed: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+s.managementKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("cliproxy request failed: %w", err)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("cliproxy import failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	useSuffix := len(sources) > 1
+	for _, source := range sources {
+		payload, err := s.buildPayload(account, source.accessToken, source.refreshToken, accountID)
+		if err != nil {
+			return err
+		}
+		name := s.buildFileNameForSource(account, source, useSuffix)
+		if err := s.syncAuthFile(ctx, name, payload); err != nil {
+			return err
+		}
 	}
 	s.markSynced(account)
 	s.cleanupLegacyFiles(ctx, account)
@@ -155,14 +168,21 @@ func (s *CliproxySyncService) Eligible(account *models.Account) bool {
 	if account == nil {
 		return false
 	}
-	status := ""
+	if account.IsPlus || account.IsTeam {
+		return true
+	}
 	if account.AccessToken != "" {
-		status = ExtractSubscriptionStatusFromToken(account.AccessToken)
+		if IsCliproxyEligibleSubscription(ExtractSubscriptionStatusFromToken(account.AccessToken)) {
+			return true
+		}
 	}
-	if status == "" {
-		status = NormalizeSubscriptionStatus(account.SubscriptionStatus)
+	if status := NormalizeSubscriptionStatus(account.SubscriptionStatus); IsCliproxyEligibleSubscription(status) {
+		return true
 	}
-	return IsCliproxyEligibleSubscription(status)
+	if tokenEligibleForCliproxy(account.PlusAccessToken) || tokenEligibleForCliproxy(account.TeamAccessToken) {
+		return true
+	}
+	return false
 }
 
 func (s *CliproxySyncService) markSynced(account *models.Account) {
@@ -274,27 +294,26 @@ func (s *CliproxySyncService) RemoteHasAccount(remote map[string]struct{}, accou
 	return false
 }
 
-func (s *CliproxySyncService) buildPayload(account *models.Account) (map[string]interface{}, error) {
+func (s *CliproxySyncService) buildPayload(account *models.Account, accessToken, refreshToken, accountID string) (map[string]interface{}, error) {
 	if account.Email == "" {
 		return nil, errors.New("cliproxy payload missing email")
 	}
-	if account.AccountID == "" && account.AccessToken != "" {
-		account.AccountID = extractAccountIDFromAccessToken(account.AccessToken)
+	if strings.TrimSpace(refreshToken) == "" {
+		return nil, errors.New("cliproxy payload missing refresh_token")
+	}
+	if strings.TrimSpace(accountID) == "" {
+		return nil, errors.New("cliproxy payload missing account_id")
 	}
 	payload := map[string]interface{}{
 		"type":          "codex",
 		"email":         account.Email,
-		"refresh_token": account.RefreshToken,
+		"refresh_token": refreshToken,
+		"account_id":    accountID,
 	}
-	if account.AccessToken != "" {
-		payload["access_token"] = account.AccessToken
+	if accessToken != "" {
+		payload["access_token"] = accessToken
 		// CLIProxyAPI UI parses id_token claims; reuse access_token JWT as a fallback.
-		payload["id_token"] = account.AccessToken
-	}
-	if account.AccountID != "" {
-		payload["account_id"] = account.AccountID
-	} else {
-		return nil, errors.New("cliproxy payload missing account_id")
+		payload["id_token"] = accessToken
 	}
 	if account.TokenExpired != nil {
 		payload["expired"] = account.TokenExpired.UTC().Format(time.RFC3339)
@@ -313,17 +332,41 @@ func (s *CliproxySyncService) expectedFileNames(account *models.Account) []strin
 	if account == nil {
 		return nil
 	}
+	sources := s.authSources(account)
+	useSuffix := len(sources) > 1
+	names := make(map[string]struct{})
+
+	if len(sources) == 0 {
+		current := s.buildFileName(account)
+		if current != "" {
+			names[current] = struct{}{}
+		}
+	} else {
+		for _, source := range sources {
+			name := s.buildFileNameForSource(account, source, useSuffix)
+			if name != "" {
+				names[name] = struct{}{}
+			}
+		}
+	}
+
 	current := s.buildFileName(account)
-	names := []string{current}
-	legacyID := s.buildLegacyAccountIDFileName(account)
-	if legacyID != "" && legacyID != current {
-		names = append(names, legacyID)
+	if _, ok := names[current]; ok {
+		legacyID := s.buildLegacyAccountIDFileName(account)
+		if legacyID != "" && legacyID != current {
+			names[legacyID] = struct{}{}
+		}
+		legacyEmail := s.buildLegacyEmailFileName(account)
+		if legacyEmail != "" && legacyEmail != current {
+			names[legacyEmail] = struct{}{}
+		}
 	}
-	legacyEmail := s.buildLegacyEmailFileName(account)
-	if legacyEmail != "" && legacyEmail != current {
-		names = append(names, legacyEmail)
+
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
 	}
-	return names
+	return out
 }
 
 func (s *CliproxySyncService) buildFileName(account *models.Account) string {
@@ -335,6 +378,38 @@ func (s *CliproxySyncService) buildFileName(account *models.Account) string {
 		base = fmt.Sprintf("account-%d", account.ID)
 	}
 	base = sanitizeFileName(base)
+	return fmt.Sprintf(cliproxyAuthFilePattern, s.filePrefix, base)
+}
+
+func (s *CliproxySyncService) buildFileNameForSource(account *models.Account, source cliproxyAuthSource, useSuffix bool) string {
+	if account == nil {
+		return ""
+	}
+	if source.label == "" {
+		return s.buildFileName(account)
+	}
+	if !useSuffix {
+		return s.buildFileName(account)
+	}
+	return s.buildFileNameWithSuffix(account, source.label)
+}
+
+func (s *CliproxySyncService) buildFileNameWithSuffix(account *models.Account, suffix string) string {
+	if account == nil {
+		return ""
+	}
+	base := strings.TrimSpace(account.Email)
+	if base == "" {
+		base = strings.TrimSpace(account.AccountID)
+	}
+	if base == "" {
+		base = fmt.Sprintf("account-%d", account.ID)
+	}
+	base = sanitizeFileName(base)
+	suffix = sanitizeFileName(suffix)
+	if suffix != "" {
+		base = fmt.Sprintf("%s-%s", base, suffix)
+	}
 	return fmt.Sprintf(cliproxyAuthFilePattern, s.filePrefix, base)
 }
 
@@ -360,6 +435,68 @@ func (s *CliproxySyncService) buildLegacyEmailFileName(account *models.Account) 
 	}
 	base = sanitizeFileNameLegacy(base)
 	return fmt.Sprintf(cliproxyAuthFilePattern, s.filePrefix, base)
+}
+
+func (s *CliproxySyncService) authSources(account *models.Account) []cliproxyAuthSource {
+	if account == nil {
+		return nil
+	}
+	var sources []cliproxyAuthSource
+	seen := map[string]struct{}{}
+	add := func(label, accessToken, refreshToken string) {
+		refreshToken = strings.TrimSpace(refreshToken)
+		if refreshToken == "" {
+			return
+		}
+		if _, ok := seen[refreshToken]; ok {
+			return
+		}
+		seen[refreshToken] = struct{}{}
+		sources = append(sources, cliproxyAuthSource{
+			label:        label,
+			accessToken:  strings.TrimSpace(accessToken),
+			refreshToken: refreshToken,
+		})
+	}
+	add("", account.AccessToken, account.RefreshToken)
+	add("plus", account.PlusAccessToken, account.PlusRefreshToken)
+	add("team", account.TeamAccessToken, account.TeamRefreshToken)
+	return sources
+}
+
+func (s *CliproxySyncService) syncAuthFile(ctx context.Context, name string, payload map[string]interface{}) error {
+	if s == nil || !s.enabled {
+		return errors.New("cliproxy sync is not configured")
+	}
+	if strings.TrimSpace(name) == "" {
+		return errors.New("cliproxy request missing name")
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("cliproxy payload marshal failed: %w", err)
+	}
+
+	reqURL := fmt.Sprintf("%s/v0/management/auth-files?name=%s", s.baseURL, url.QueryEscape(name))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("cliproxy request build failed: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.managementKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("cliproxy request failed: %w", err)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("cliproxy import failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
 }
 
 func sanitizeFileName(input string) string {
@@ -507,6 +644,14 @@ func extractAccountIDFromAuthClaim(value interface{}) string {
 		}
 	}
 	return ""
+}
+
+func tokenEligibleForCliproxy(token string) bool {
+	if token == "" {
+		return false
+	}
+	flags := ExtractSubscriptionFlags(token)
+	return flags.IsPlus || flags.IsTeam
 }
 
 func stringValue(value interface{}) string {
